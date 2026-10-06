@@ -233,8 +233,13 @@ export class ApiClient {
 }
 
 // Create API instance. ApiClient normalize trailing/leading slashes.
-const defaultApiUrl = process.env.NODE_ENV === "development" ? "http://localhost:1000" : "";
-export const api = new ApiClient(process.env.NEXT_PUBLIC_API_URL || defaultApiUrl);
+
+const currentUrl = window.location.href;
+const defaultApiUrl = currentUrl.includes('investor-git-development-uptipros-projects.vercel.app') ? 'https://buyops-backend-development.up.railway.app' : currentUrl.includes('localhost') ? 'http://localhost:1000' : process.env.NEXT_PUBLIC_API_URL
+
+
+// const defaultApiUrl = process.env.NODE_ENV === "development" ? "http://localhost:1000" : "";
+export const api = new ApiClient(defaultApiUrl);
 
 // Auth API
 export const authAPI = {
