@@ -232,8 +232,11 @@ export class ApiClient {
 }
 
 // Create API instances
-const defaultApiUrl = process.env.NODE_ENV === "development" ? "http://localhost:1000" : "";
-export const api = new ApiClient(process.env.NEXT_PUBLIC_API_URL || defaultApiUrl);
+// const defaultApiUrl = process.env.NODE_ENV === "development" ? "http://localhost:1000" : "";
+const currentUrl = window.location.href;
+const defaultApiUrl = currentUrl.includes('admin-git-development-uptipros-projects') ? 'https://buyops-backend-development.up.railway.app/' : currentUrl.includes('localhost') ? 'http://localhost:1000/' : process.env.NEXT_PUBLIC_API_URL
+
+export const api = new ApiClient(defaultApiUrl);
 
 // Auth API
 export const authAPI = {
@@ -339,22 +342,22 @@ export interface InvestorVerificationResponse {
 
 export type InvestorLoginResponse =
   | {
-      verificationRequired: true;
-      email: string;
-      nextStep: "VERIFY_EMAIL";
-    }
+    verificationRequired: true;
+    email: string;
+    nextStep: "VERIFY_EMAIL";
+  }
   | {
-      access_token: string;
-      user: {
-        id: string;
-        email: string;
-        name: string;
-        phone?: string | null;
-        role: string;
-      };
-      investor: InvestorAuthContext;
-      nextStep: "DASHBOARD" | "ENTITY_ONBOARDING";
+    access_token: string;
+    user: {
+      id: string;
+      email: string;
+      name: string;
+      phone?: string | null;
+      role: string;
     };
+    investor: InvestorAuthContext;
+    nextStep: "DASHBOARD" | "ENTITY_ONBOARDING";
+  };
 
 export interface InvestorProfileResponse {
   id: string;
