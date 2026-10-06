@@ -232,7 +232,7 @@ export class ApiClient {
   }
 }
 
-// Create API instance. ApiClient normalizes trailing/leading slashes.
+// Create API instance. ApiClient normalize trailing/leading slashes.
 const defaultApiUrl = process.env.NODE_ENV === "development" ? "http://localhost:1000" : "";
 export const api = new ApiClient(process.env.NEXT_PUBLIC_API_URL || defaultApiUrl);
 
