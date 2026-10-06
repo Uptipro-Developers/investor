@@ -66,7 +66,7 @@ export class ApiClient {
 
     this.refreshPromise = (async () => {
       try {
-        const response = await fetch(this.buildURL("/auth/refresh"), {
+        const response = await fetch(this.buildURL("auth/refresh"), {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -123,7 +123,7 @@ export class ApiClient {
           this.createTimeout(timeout),
         ]);
 
-        if (response.status === 401 && !skipAuthRefresh && endpoint !== "/auth/refresh") {
+        if (response.status === 401 && !skipAuthRefresh && endpoint !== "auth/refresh") {
           const refreshedToken = await this.refreshAuthToken();
           if (refreshedToken) {
             requestHeaders.set("Authorization", `Bearer ${refreshedToken}`);
@@ -234,40 +234,40 @@ export class ApiClient {
 // Create API instances
 // const defaultApiUrl = process.env.NODE_ENV === "development" ? "http://localhost:1000" : "";
 const currentUrl = window.location.href;
-const defaultApiUrl = currentUrl.includes('admin-git-development-uptipros-projects') ? 'https://buyops-backend-development.up.railway.app/' : currentUrl.includes('localhost') ? 'http://localhost:1000/' : process.env.NEXT_PUBLIC_API_URL
+const defaultApiUrl = currentUrl.includes('admin-git-development-uptipros-projects') ? 'https://buyops-backend-development.up.railway.app/' : currentUrl.includes('localhost') ? 'http://localhost:1000/' : process.env.NEXT_PRIVATE_API_URL
 
 export const api = new ApiClient(defaultApiUrl);
 
 // Auth API
 export const authAPI = {
   loginInvestor: (email: string, password: string, rememberMe: boolean) =>
-    api.post<InvestorLoginResponse>("/auth/investor/login", { email, password, rememberMe }),
+    api.post<InvestorLoginResponse>("auth/investor/login", { email, password, rememberMe }),
 
   signup: (data: any) =>
     api.post<{ token: string; user: any }>(API_ENDPOINTS.auth.signup, data),
 
-  logout: () => api.post("/auth/logout"),
+  logout: () => api.post("auth/logout"),
 
   verifyOTP: (email: string, otp: string) =>
     api.post(API_ENDPOINTS.auth.verifyOTP, { email, otp }),
 
   forgotPassword: (email: string) =>
-    api.post<{ message: string }>("/auth/investor/forgot-password", { email }),
+    api.post<{ message: string }>("auth/investor/forgot-password", { email }),
 
   resetPassword: (token: string, password: string) =>
-    api.post<{ message: string }>("/auth/investor/reset-password", { token, password }),
+    api.post<{ message: string }>("auth/investor/reset-password", { token, password }),
 
   registerInvestor: (data: InvestorRegistrationRequest) =>
-    api.post<InvestorRegistrationResponse>("/auth/investor/register", data),
+    api.post<InvestorRegistrationResponse>("auth/investor/register", data),
 
   verifyInvestorEmail: (email: string, code: string) =>
-    api.post<InvestorVerificationResponse>("/auth/investor/verify-email", { email, code }),
+    api.post<InvestorVerificationResponse>("auth/investor/verify-email", { email, code }),
 
   resendInvestorVerification: (email: string) =>
-    api.post<{ message: string }>("/auth/investor/resend-verification", { email }),
+    api.post<{ message: string }>("auth/investor/resend-verification", { email }),
 
   investorProfile: () =>
-    api.get<InvestorProfileResponse>("/auth/investor/me"),
+    api.get<InvestorProfileResponse>("auth/investor/me"),
 };
 
 export interface InvestorAuthContext {
@@ -439,18 +439,18 @@ export type InvestorKycResponse = {
 };
 
 export const investorKycAPI = {
-  get: () => api.get<InvestorKycResponse>("/investor/kyc"),
+  get: () => api.get<InvestorKycResponse>("investor/kyc"),
   save: (profile: Record<string, unknown>, declarations: Record<string, unknown>) =>
-    api.put<InvestorKycResponse>("/investor/kyc", { profile, declarations }),
+    api.put<InvestorKycResponse>("investor/kyc", { profile, declarations }),
   uploadDocument: (requirementCode: string, file: File) => {
     const data = new FormData();
     data.append("requirementCode", requirementCode);
     data.append("file", file);
-    return api.postForm<InvestorKycResponse["documents"][number]>("/investor/kyc/documents", data);
+    return api.postForm<InvestorKycResponse["documents"][number]>("investor/kyc/documents", data);
   },
   deleteDocument: (documentId: string) =>
     api.delete<{ success: boolean }>(`/investor/kyc/documents/${encodeURIComponent(documentId)}`),
-  submit: () => api.post<InvestorKycResponse>("/investor/kyc/submit"),
+  submit: () => api.post<InvestorKycResponse>("investor/kyc/submit"),
   downloadDocument: (documentId: string) =>
     api.download(`/investor/kyc/documents/${encodeURIComponent(documentId)}`),
 };
@@ -491,7 +491,7 @@ export const paymentsAPI = {
     currency?: string;
     metadata?: Record<string, unknown>;
     title?: string;
-  }) => api.post<{ provider: string; reference: string; authorizationUrl?: string }>('/payments/initialize', data),
+  }) => api.post<{ provider: string; reference: string; authorizationUrl?: string }>('payments/initialize', data),
   verify: (provider: "paystack" | "flutterwave", reference: string) =>
     api.get<{ provider: string; reference: string; status: string; amount?: number; currency?: string; customerEmail?: string }>(`/payments/verify?provider=${provider}&reference=${encodeURIComponent(reference)}`),
 };
