@@ -1,413 +1,149 @@
 "use client";
 
-import { useState } from "react";
-import { motion } from "framer-motion";
-import {
-  Upload,
-  CheckCircle,
-  AlertCircle,
-  FileText,
-  Camera,
-  Shield,
-  ArrowRight,
-  User,
-  Briefcase,
-  Building2,
-  Lock,
-  Crown,
-  Anchor,
-  Award,
-} from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useEffect, useState } from "react";
+import { AlertCircle, Building2, CheckCircle, Download, FileText, Loader2, RefreshCw, Shield, Trash2, Upload } from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { useAppStore } from "@/stores/appStore";
-import Link from "next/link";
+import { authStorage, investorKycAPI, type InvestorKycResponse, type KycFieldRequirement } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
+import type { User as InvestorUser } from "@/types";
+
+const STATUS_LABELS: Record<InvestorKycResponse["investor"]["onboardingStatus"], string> = {
+  EMAIL_PENDING: "Email verification required", PROFILE_PENDING: "Not submitted", KYC_PENDING: "Not submitted",
+  UNDER_REVIEW: "Under review", REMEDIATION_REQUIRED: "Action required", VERIFIED: "Verified", REJECTED: "Rejected",
+};
+const ENTITY_LABELS = { INDIVIDUAL: "Individual", FAMILY_OFFICE: "Family Office", INSTITUTION: "Institution" } as const;
+
+function toStoreStatus(status: InvestorKycResponse["investor"]["onboardingStatus"]): InvestorUser["kycStatus"] {
+  if (status === "VERIFIED") return "verified";
+  if (status === "UNDER_REVIEW") return "under_review";
+  if (status === "REMEDIATION_REQUIRED") return "remediation_required";
+  if (status === "REJECTED") return "failed";
+  return "pending";
+}
+
+const fieldValue = (value: string | string[] | undefined) => Array.isArray(value) ? value.join(", ") : value || "";
 
 export default function KYCPage() {
-  const { user, setKycStatus } = useAppStore();
-  const [entityType, setEntityType] = useState<"individual" | "family-office" | "institution">(
-    (user?.entityType as any) || "individual"
-  );
-  const [kycStep, setKycStep] = useState(1);
-  const [submitted, setSubmitted] = useState(false);
+  const toast = useToast();
+  const { setUser } = useAppStore();
+  const [data, setData] = useState<InvestorKycResponse | null>(null);
+  const [profile, setProfile] = useState<Record<string, string>>({});
+  const [declarations, setDeclarations] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const isVerified = user?.kycStatus === "verified";
-  const kycStatus = user?.kycStatus;
-  const isFailed = kycStatus === "failed";
-  const isRemediation = kycStatus === "remediation_required";
-  const showReview = submitted || kycStatus === "under_review";
-
-  const getEntityRequirements = () => {
-    switch (entityType) {
-      case "family-office":
-        return [
-          { number: 1, title: "Articles of Incorporation", description: "Upload Family Office Registration or Deed" },
-          { number: 2, title: "Trustee/Director Passports", description: "Valid IDs of authorized managing trustees" },
-          { number: 3, title: "Proof of AUM / Asset Scale", description: "Audited statement or bank reference (> $10M+ AUM)" },
-          { number: 4, title: "Beneficial Ownership (UBO)", description: "Ultimate Beneficial Owner Register & Tax ID" },
-        ];
-      case "institution":
-        return [
-          { number: 1, title: "Corporate Registration & Tax ID", description: "Certificate of Incorporation & TIN/LEI" },
-          { number: 2, title: "Board Resolution Letter", description: "Authorized delegation for real estate investment" },
-          { number: 3, title: "Officer / Director Identification", description: "Government photo IDs of signatory officers" },
-          { number: 4, title: "AML Compliance Certificate", description: "Audited Financials & Anti-Money Laundering Declaration" },
-        ];
-      default: // Individual
-        return [
-          { number: 1, title: "Government Photo ID", description: "Passport, Driver's License, or National ID" },
-          { number: 2, title: "Live Biometric Selfie", description: "Clear photo holding your photo ID" },
-          { number: 3, title: "Proof of Address", description: "Utility bill or bank statement (< 3 months)" },
-          { number: 4, title: "Accreditation Questionnaire", description: "Investor risk profile & source of funds" },
-        ];
-    }
+  const syncUser = (response: InvestorKycResponse) => {
+    const existing = useAppStore.getState().user;
+    const updated: InvestorUser = {
+      ...(existing || { id: response.investor.userId, email: response.investor.email, fullName: response.investor.name, phone: response.investor.phone || "", country: "", investmentExperience: "beginner", riskAppetite: "medium", createdAt: new Date() }),
+      entityType: response.investor.entityType === "FAMILY_OFFICE" ? "family-office" : response.investor.entityType === "INSTITUTION" ? "institution" : "individual",
+      investorTrack: response.investor.track === "HARBOR" ? "harbor" : "foundry",
+      kycStatus: toStoreStatus(response.investor.onboardingStatus),
+      kycRemediationItems: response.remediationItems.map((item) => `${item.label}: ${item.reason}`),
+      kycSubmittedAt: response.submittedAt ? new Date(response.submittedAt) : existing?.kycSubmittedAt,
+      kycVerifiedAt: response.investor.onboardingStatus === "VERIFIED" ? new Date(response.reviewedAt || Date.now()) : existing?.kycVerifiedAt,
+    };
+    setUser(updated);
+    authStorage.setUser(updated);
   };
 
-  const steps = getEntityRequirements();
-
-  const handleFakeSubmit = () => {
-    setSubmitted(true);
-    setKycStatus("under_review");
+  const applyResponse = (response: InvestorKycResponse) => {
+    setData(response);
+    setProfile(Object.fromEntries(Object.entries(response.profile).map(([key, value]) => [key, fieldValue(value)])));
+    setDeclarations(Object.fromEntries(Object.entries(response.declarations).map(([key, value]) => [key, fieldValue(value)])));
+    syncUser(response);
   };
 
-  return (
-    <div className="space-y-8 max-w-5xl">
-      {/* Page Header */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Identity verification</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Complete verification for your individual or family-office account.
-          </p>
-        </div>
+  const load = async () => {
+    setLoading(true); setError(null);
+    const response = await investorKycAPI.get();
+    setLoading(false);
+    if (!response.success || !response.data) { setError(response.error || "Unable to load your KYC profile."); return; }
+    applyResponse(response.data);
+  };
 
-        {/* Entity Selector Pills */}
-        <div className="inline-flex items-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-100 p-1.5 shadow-sm">
-          <button
-            onClick={() => {
-              setEntityType("individual");
-              setKycStep(1);
-            }}
-            className={`flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition-all ${
-              entityType === "individual"
-                ? "bg-white text-slate-900 shadow-sm"
-                : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            <User className="h-3.5 w-3.5 text-emerald-600" />
-            Individual
-          </button>
+  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
-          <button
-            onClick={() => {
-              setEntityType("family-office");
-              setKycStep(1);
-            }}
-            className={`flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition-all ${
-              entityType === "family-office"
-                ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-sm"
-                : "text-purple-700 hover:text-purple-800"
-            }`}
-          >
-            <Briefcase className="h-3.5 w-3.5" />
-            Family Office
-          </button>
+  const editable = !!data && ["KYC_PENDING", "PROFILE_PENDING", "REMEDIATION_REQUIRED", "REJECTED"].includes(data.investor.onboardingStatus);
+  const approvedDocuments = data?.documents.filter((document) => document.status === "APPROVED").length || 0;
 
-          <button
-            onClick={() => {
-              setEntityType("institution");
-              setKycStep(1);
-            }}
-            className={`flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition-all ${
-              entityType === "institution"
-                ? "bg-gradient-to-r from-amber-500 to-yellow-600 text-black shadow-sm"
-                : "text-amber-700 hover:text-amber-800"
-            }`}
-          >
-            <Building2 className="h-3.5 w-3.5" />
-            Institution
-          </button>
-        </div>
-      </div>
+  const save = async (quiet = false) => {
+    if (!data) return null;
+    setSaving(true);
+    const response = await investorKycAPI.save(profile, declarations);
+    setSaving(false);
+    if (!response.success || !response.data) { toast.error("Could not save KYC", response.error || "Please try again."); return null; }
+    applyResponse(response.data);
+    if (!quiet) toast.success("KYC details saved", "Your draft has been saved securely.");
+    return response.data;
+  };
 
-      {/* Verification Status Banner */}
-      <Card className={
-        isVerified ? "bg-emerald-50 border-emerald-200"
-        : isFailed ? "bg-red-50 border-red-200"
-        : isRemediation ? "bg-orange-50 border-orange-200"
-        : "bg-gradient-to-r from-amber-50 to-orange-50 border-amber-200"
-      }>
-        <CardContent className="p-6">
-          <div className="flex items-center space-x-4">
-            {isVerified ? (
-              <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                <CheckCircle className="h-7 w-7 text-emerald-600" />
-              </div>
-            ) : isFailed ? (
-              <div className="w-14 h-14 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
-                <AlertCircle className="h-7 w-7 text-red-600" />
-              </div>
-            ) : isRemediation ? (
-              <div className="w-14 h-14 rounded-full bg-orange-100 flex items-center justify-center flex-shrink-0">
-                <AlertCircle className="h-7 w-7 text-orange-600" />
-              </div>
-            ) : showReview ? (
-              <div className="w-14 h-14 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
-                <Shield className="h-7 w-7 text-blue-600" />
-              </div>
-            ) : (
-              <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
-                <AlertCircle className="h-7 w-7 text-amber-600" />
-              </div>
-            )}
-            <div className="flex-1">
-              <div className="flex items-center gap-2">
-                <h3 className="text-xl font-bold text-slate-900">
-                  {isVerified
-                    ? "KYC Verified"
-                    : isFailed
-                    ? "Verification Failed"
-                    : isRemediation
-                    ? "Remediation Required"
-                    : showReview
-                    ? "Verification Under Review"
-                    : `KYC Required for ${entityType === "family-office" ? "Family Office" : entityType === "institution" ? "Institutional Tier" : "Individual Tier"}`}
-                </h3>
-                <Badge
-                  className={
-                    entityType === "family-office"
-                      ? "bg-purple-600 text-white"
-                      : entityType === "institution"
-                      ? "bg-amber-500 text-black font-bold"
-                      : "bg-emerald-600 text-white"
-                  }
-                >
-                  {entityType.toUpperCase()}
-                </Badge>
-              </div>
-              <p className="text-sm text-slate-600 mt-1">
-                {isVerified
-                  ? "Your entity status is fully verified. Full access to institutional and fractional allocations."
-                  : isFailed
-                  ? "Your verification could not be completed. Please review the issues and resubmit your documents."
-                  : isRemediation
-                  ? "Additional information is required to complete your verification."
-                  : showReview
-                  ? "Your compliance documents have been submitted securely to independent trustees. Expected review window: 12-24 hours."
-                  : `Please upload the required ${entityType === "individual" ? "personal identity" : "corporate/legal"} documents below to unlock platform allocation.`}
-              </p>
-              {isRemediation && user?.kycRemediationItems && user.kycRemediationItems.length > 0 && (
-                <ul className="mt-2 list-disc list-inside text-sm text-orange-700 space-y-0.5">
-                  {user.kycRemediationItems.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+  const uploadDocument = async (requirementCode: string, file?: File) => {
+    if (!file) return;
+    setUploading(requirementCode);
+    const response = await investorKycAPI.uploadDocument(requirementCode, file);
+    setUploading(null);
+    if (!response.success) { toast.error("Upload failed", response.error || "Use a PDF, JPG, or PNG file up to 15MB."); return; }
+    toast.success("Document uploaded", file.name); await load();
+  };
 
-      {!isVerified && !submitted && entityType === "institution" && (
-        <Card className="bg-amber-50 border-amber-200">
-          <CardContent className="p-6 text-center space-y-3">
-            <Building2 className="h-12 w-12 text-amber-600 mx-auto" />
-            <h3 className="text-xl font-bold text-amber-900">Institutional onboarding is handled separately</h3>
-            <p className="text-sm text-amber-800 max-w-md mx-auto">
-              Corporate & institutional KYC/KYB (CAC verification, UBO identification, sanctions / PEP / adverse-media / AML screening) is completed via the dedicated onboarding flow.
-            </p>
-            <Link href="/onboard/institutional">
-              <Button className="mt-2 rounded-2xl bg-gradient-to-r from-amber-500 to-yellow-600 text-black font-bold">
-                Start Institutional Onboarding <ArrowRight className="ml-2 h-5 w-5" />
-              </Button>
-            </Link>
-          </CardContent>
-        </Card>
-      )}
+  const removeDocument = async (documentId: string) => {
+    setDeleting(documentId); const response = await investorKycAPI.deleteDocument(documentId); setDeleting(null);
+    if (!response.success) { toast.error("Could not remove document", response.error || "Please try again."); return; }
+    await load();
+  };
 
-      {!isVerified && !submitted && entityType !== "institution" && (
-        <>
-          {/* Progress Steps for Active Entity */}
-          <div className="grid md:grid-cols-4 gap-4">
-            {steps.map((step) => (
-              <div
-                key={step.number}
-                onClick={() => setKycStep(step.number)}
-                className={`p-4 rounded-2xl border-2 transition-all cursor-pointer ${
-                  kycStep === step.number
-                    ? entityType === "family-office"
-                      ? "border-purple-500 bg-purple-50/50 shadow-md"
-                      : "border-emerald-500 bg-emerald-50/50 shadow-md"
-                    : kycStep > step.number
-                    ? "border-slate-300 bg-slate-50"
-                    : "border-slate-200 bg-white"
-                }`}
-              >
-                <div
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center mb-3 font-bold text-sm ${
-                    kycStep > step.number
-                      ? "bg-slate-900 text-white"
-                      : kycStep === step.number
-                      ? entityType === "family-office"
-                        ? "bg-purple-600 text-white"
-                        : "bg-emerald-600 text-white"
-                      : "bg-slate-100 text-slate-400"
-                  }`}
-                >
-                  {kycStep > step.number ? <CheckCircle className="h-5 w-5" /> : step.number}
-                </div>
-                <h4 className="font-bold text-slate-900 text-sm">{step.title}</h4>
-                <p className="text-xs text-slate-500 mt-1 leading-snug">{step.description}</p>
-              </div>
-            ))}
-          </div>
+  const downloadDocument = async (documentId: string, name: string) => {
+    const response = await investorKycAPI.downloadDocument(documentId);
+    if (!response.success || !response.data) { toast.error("Download failed", response.error || "Please try again."); return; }
+    const url = URL.createObjectURL(response.data); const anchor = document.createElement("a"); anchor.href = url; anchor.download = name; anchor.click(); URL.revokeObjectURL(url);
+  };
 
-          {/* Dynamic Document Upload Section */}
-          <div className="grid md:grid-cols-2 gap-6">
-            {/* Document 1 Upload */}
-            <Card className="border-slate-200 shadow-sm">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center">
-                  <FileText className="h-5 w-5 mr-2 text-amber-600" />
-                  {steps[0].title}
-                </CardTitle>
-                <CardDescription className="text-xs">{steps[0].description}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center hover:border-amber-400 transition-colors cursor-pointer bg-slate-50/50">
-                  <Upload className="h-10 w-10 text-slate-400 mx-auto mb-3" />
-                  <p className="font-semibold text-slate-900 text-sm mb-1">Click or drag file to upload</p>
-                  <p className="text-xs text-slate-500 mb-3">Accepts PDF, PNG, JPG (Max 15MB)</p>
-                  <Button variant="outline" size="sm" className="rounded-xl">
-                    Select File
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+  const submit = async () => {
+    setSubmitting(true); const saved = await save(true);
+    if (!saved) { setSubmitting(false); return; }
+    const response = await investorKycAPI.submit(); setSubmitting(false);
+    if (!response.success || !response.data) { toast.error("KYC is not ready", response.error || "Complete every required field and document."); return; }
+    applyResponse(response.data); toast.success("KYC submitted", "The compliance team will review your documents manually.");
+  };
 
-            {/* Document 2 Upload */}
-            <Card className="border-slate-200 shadow-sm">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center">
-                  <Shield className="h-5 w-5 mr-2 text-purple-600" />
-                  {steps[1].title}
-                </CardTitle>
-                <CardDescription className="text-xs">{steps[1].description}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center hover:border-purple-400 transition-colors cursor-pointer bg-slate-50/50">
-                  <Upload className="h-10 w-10 text-slate-400 mx-auto mb-3" />
-                  <p className="font-semibold text-slate-900 text-sm mb-1">Click or drag file to upload</p>
-                  <p className="text-xs text-slate-500 mb-3">Accepts PDF, PNG, JPG (Max 15MB)</p>
-                  <Button variant="outline" size="sm" className="rounded-xl">
-                    Select File
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+  if (loading) return <Card className="max-w-4xl"><CardContent className="flex items-center justify-center gap-3 p-12 text-slate-600"><Loader2 className="h-5 w-5 animate-spin" /> Loading your KYC requirements…</CardContent></Card>;
+  if (error || !data) return <Card className="max-w-3xl border-red-200"><CardContent className="p-10 text-center"><AlertCircle className="mx-auto h-10 w-10 text-red-500" /><h2 className="mt-3 text-xl font-bold">Unable to load KYC</h2><p className="mt-2 text-sm text-slate-600">{error}</p><Button className="mt-5" onClick={() => void load()}><RefreshCw className="mr-2 h-4 w-4" /> Try again</Button></CardContent></Card>;
 
-            {/* Document 3 Upload */}
-            <Card className="border-slate-200 shadow-sm">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center">
-                  <Award className="h-5 w-5 mr-2 text-cyan-600" />
-                  {steps[2].title}
-                </CardTitle>
-                <CardDescription className="text-xs">{steps[2].description}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center hover:border-cyan-400 transition-colors cursor-pointer bg-slate-50/50">
-                  <Upload className="h-10 w-10 text-slate-400 mx-auto mb-3" />
-                  <p className="font-semibold text-slate-900 text-sm mb-1">Click or drag file to upload</p>
-                  <p className="text-xs text-slate-500 mb-3">Accepts PDF, PNG, JPG (Max 15MB)</p>
-                  <Button variant="outline" size="sm" className="rounded-xl">
-                    Select File
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+  const status = data.investor.onboardingStatus;
+  const statusClasses = status === "VERIFIED" ? "border-emerald-200 bg-emerald-50" : status === "UNDER_REVIEW" ? "border-blue-200 bg-blue-50" : status === "REMEDIATION_REQUIRED" ? "border-orange-200 bg-orange-50" : status === "REJECTED" ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50";
 
-            {/* Entity Declarations */}
-            <Card className="border-slate-200 shadow-sm">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center">
-                  <Lock className="h-5 w-5 mr-2 text-emerald-600" />
-                  {steps[3].title}
-                </CardTitle>
-                <CardDescription className="text-xs">{steps[3].description}</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    {entityType === "individual"
-                      ? "Source of Funds"
-                      : entityType === "family-office"
-                      ? "Declared AUM Range"
-                      : "Institutional Tax ID / LEI Number"}
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-sm focus:border-amber-500 focus:outline-none bg-slate-50"
-                    placeholder={
-                      entityType === "individual"
-                        ? "e.g. Executive Salary / Investment Income"
-                        : entityType === "family-office"
-                        ? "e.g. $50M - $100M AUM"
-                        : "e.g. LEI-984900A12B34C56"
-                    }
-                  />
-                </div>
+  return <div className="mx-auto max-w-5xl space-y-6">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h1 className="font-display text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Identity verification</h1><p className="mt-1 text-sm text-slate-500">Manual KYC / KYB review for your registered investor category.</p></div><div className="flex flex-wrap gap-2"><Badge className="bg-slate-900 px-3 py-1.5 text-white">{ENTITY_LABELS[data.investor.entityType]}</Badge><Badge variant="secondary" className="px-3 py-1.5">Urbco {data.investor.track === "HARBOR" ? "Harbor" : "Foundry"}</Badge></div></div>
+    <Card className={statusClasses}><CardContent className="p-6"><div className="flex flex-col gap-5 sm:flex-row sm:items-center"><div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white/80">{status === "VERIFIED" ? <CheckCircle className="h-7 w-7 text-emerald-600" /> : status === "UNDER_REVIEW" ? <Shield className="h-7 w-7 text-blue-600" /> : <AlertCircle className="h-7 w-7 text-amber-600" />}</div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-xl font-bold text-slate-900">{STATUS_LABELS[status]}</h2><Badge variant="secondary">Revision {data.submissionRevision}</Badge></div><p className="mt-1 text-sm text-slate-700">{status === "VERIFIED" ? "Your identity has been verified and you can invest in eligible assets." : status === "UNDER_REVIEW" ? "Your submission is locked while the compliance team reviews it manually." : status === "REMEDIATION_REQUIRED" ? "Correct the items listed below, then resubmit your KYC." : status === "REJECTED" ? "Review the compliance feedback, replace the required information, and resubmit." : "Complete every required field and upload the requested documents."}</p></div><div className="w-full sm:w-48"><div className="mb-1 flex justify-between text-xs font-medium"><span>Completion</span><span>{data.completion.percent}%</span></div><Progress value={data.completion.percent} className="h-2" /></div></div></CardContent></Card>
+    {data.remediationItems.length > 0 && <Card className="border-orange-200 bg-orange-50"><CardHeader><CardTitle className="flex items-center gap-2 text-base text-orange-900"><AlertCircle className="h-5 w-5" />Compliance feedback</CardTitle><CardDescription className="text-orange-800">Resolve every item before resubmitting.</CardDescription></CardHeader><CardContent><ul className="space-y-2">{data.remediationItems.map((item) => <li key={item.id} className="rounded-lg border border-orange-200 bg-white p-3 text-sm"><span className="font-semibold">{item.label}:</span> {item.reason}</li>)}</ul></CardContent></Card>}
+    <Card><CardHeader><CardTitle className="flex items-center gap-2"><Building2 className="h-5 w-5 text-amber-600" />Profile and declarations</CardTitle><CardDescription>Requirements are based on the category and investment track selected at registration.</CardDescription></CardHeader><CardContent className="space-y-6"><FieldGrid title="Profile" fields={data.requirements.profileFields} values={profile} disabled={!editable} onChange={(code, value) => setProfile((current) => ({ ...current, [code]: value }))} /><FieldGrid title="Declarations" fields={data.requirements.declarationFields} values={declarations} disabled={!editable} onChange={(code, value) => setDeclarations((current) => ({ ...current, [code]: value }))} />{editable && <div className="flex justify-end"><Button variant="outline" onClick={() => void save()} disabled={saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save draft</Button></div>}</CardContent></Card>
+    <Card><CardHeader><CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5 text-amber-600" />Required documents</CardTitle><CardDescription>{data.completion.documents.done}/{data.completion.documents.total} required documents uploaded · {approvedDocuments} approved</CardDescription></CardHeader><CardContent className="grid gap-4 md:grid-cols-2">{data.requirements.documents.map((requirement) => {
+      const uploaded = data.documents.find((item) => item.requirementCode === requirement.code); const remediation = data.remediationItems.find((item) => item.requirementCode === requirement.code);
+      const canReplace = editable || uploaded?.status === "REJECTED";
+      return <div key={requirement.code} className={`rounded-2xl border p-4 ${uploaded?.status === "REJECTED" || remediation ? "border-red-200 bg-red-50/50" : "border-slate-200"}`}><div className="flex items-start justify-between gap-3"><div><p className="font-semibold text-slate-900">{requirement.label}{!requirement.required && <span className="ml-1 text-xs font-normal text-slate-500">(optional)</span>}</p><p className="mt-1 text-xs leading-relaxed text-slate-500">{requirement.description}</p></div>{uploaded && <DocumentStatus status={uploaded.status} />}</div>{uploaded ? <div className="mt-4 rounded-xl bg-white p-3"><p className="truncate text-sm font-medium">{uploaded.originalName}</p><p className="text-xs text-slate-500">{Math.max(1, Math.round(uploaded.size / 1024))} KB</p>{uploaded.rejectionReason && <p className="mt-2 text-xs font-medium text-red-600">{uploaded.rejectionReason}</p>}{uploaded.status === "REJECTED" && <p className="mt-2 text-xs font-semibold text-red-700">Please upload a replacement document.</p>}<div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => void downloadDocument(uploaded.id, uploaded.originalName)}><Download className="mr-1 h-3.5 w-3.5" />Download</Button>{canReplace && <><Label htmlFor={`replace-${requirement.code}`} className="inline-flex h-9 cursor-pointer items-center rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-accent"><Upload className="mr-1 h-3.5 w-3.5" />{uploaded.status === "REJECTED" ? "Upload replacement" : "Replace"}</Label><Input id={`replace-${requirement.code}`} className="sr-only" type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={(event) => void uploadDocument(requirement.code, event.target.files?.[0])} /><Button size="sm" variant="ghost" className="text-red-600" disabled={deleting === uploaded.id} onClick={() => void removeDocument(uploaded.id)}>{deleting === uploaded.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}</Button></>}</div></div> : editable ? <div className="mt-4"><Label htmlFor={`upload-${requirement.code}`} className="flex cursor-pointer flex-col items-center rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-5 text-center hover:border-amber-400"><Upload className="mb-2 h-7 w-7 text-slate-400" /><span className="text-sm font-semibold">{uploading === requirement.code ? "Uploading…" : "Select document"}</span><span className="mt-1 text-xs text-slate-500">PDF, JPG or PNG · maximum 15MB</span></Label><Input id={`upload-${requirement.code}`} className="sr-only" type="file" accept=".pdf,.png,.jpg,.jpeg" disabled={uploading === requirement.code} onChange={(event) => void uploadDocument(requirement.code, event.target.files?.[0])} /></div> : <p className="mt-4 text-sm text-slate-500">No document uploaded.</p>}</div>;
+    })}</CardContent></Card>
+    {editable && <div className="flex flex-col items-end gap-2 rounded-2xl border border-slate-200 bg-white p-5 sm:flex-row sm:justify-between"><p className="text-sm text-slate-600">Submission locks editing until the compliance team makes a decision.</p><Button size="lg" onClick={() => void submit()} disabled={submitting || saving}>{submitting ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Shield className="mr-2 h-5 w-5" />}{data.submissionRevision > 0 ? "Resubmit for review" : "Submit for review"}</Button></div>}
+  </div>;
+}
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Target Investment Track
-                  </label>
-                  <select className="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-sm focus:border-amber-500 focus:outline-none bg-slate-50">
-                    <option value="foundry">Institutional track (from ₦200M)</option>
-                    <option value="harbor">Fractional track (from ₦100K)</option>
-                    <option value="both">Both Ecosystems</option>
-                  </select>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+function FieldGrid({ title, fields, values, disabled, onChange }: { title: string; fields: KycFieldRequirement[]; values: Record<string, string>; disabled: boolean; onChange: (code: string, value: string) => void }) {
+  if (!fields.length) return null;
+  return <section><h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500">{title}</h3><div className="grid gap-4 md:grid-cols-2">{fields.map((field) => <div key={field.code} className={field.type === "textarea" ? "md:col-span-2" : ""}><Label htmlFor={field.code}>{field.label}</Label>{field.type === "textarea" ? <textarea id={field.code} value={values[field.code] || ""} disabled={disabled} onChange={(event) => onChange(field.code, event.target.value)} className="mt-1 min-h-24 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm disabled:bg-slate-50" /> : <Input id={field.code} type={field.type || "text"} value={values[field.code] || ""} disabled={disabled || field.code === "targetTrack"} onChange={(event) => onChange(field.code, event.target.value)} className="mt-1" />}</div>)}</div></section>;
+}
 
-          {/* Submit Action */}
-          <div className="flex justify-end pt-2">
-            <Button
-              onClick={handleFakeSubmit}
-              size="lg"
-              className={`rounded-2xl px-8 py-6 font-bold shadow-lg text-base ${
-                entityType === "family-office"
-                  ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-purple-500/20"
-                  : "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-emerald-500/20"
-              }`}
-            >
-              Submit {entityType === "family-office" ? "Family Office" : "Individual"} Verification Documents <ArrowRight className="ml-2 h-5 w-5" />
-            </Button>
-          </div>
-        </>
-      )}
-
-      {submitted && !isVerified && (
-        <Card className="bg-blue-50 border-blue-200">
-          <CardContent className="p-6 text-center space-y-3">
-            <CheckCircle className="h-12 w-12 text-blue-600 mx-auto" />
-            <h3 className="text-xl font-bold text-blue-900">Documents Submitted Successfully</h3>
-            <p className="text-sm text-blue-800 max-w-md mx-auto">
-              Thank you! Our institutional compliance team and trustees are reviewing your {entityType} documents. You will receive an email and in-app notification once verified.
-            </p>
-            <Button
-              variant="outline"
-              className="border-blue-300 text-blue-900 hover:bg-blue-100 mt-2"
-              onClick={() => setSubmitted(false)}
-            >
-              Update / Re-upload Documents
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  );
+function DocumentStatus({ status }: { status: "PENDING" | "APPROVED" | "REJECTED" }) {
+  if (status === "APPROVED") return <Badge className="bg-emerald-100 text-emerald-700"><CheckCircle className="mr-1 h-3 w-3" />Approved</Badge>;
+  if (status === "REJECTED") return <Badge className="bg-red-100 text-red-700"><AlertCircle className="mr-1 h-3 w-3" />Rejected</Badge>;
+  return <Badge className="bg-amber-100 text-amber-700">Awaiting review</Badge>;
 }

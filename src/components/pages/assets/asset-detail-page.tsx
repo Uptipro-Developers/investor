@@ -1,11 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
 import {
-  MapPin, Building2, Bed, Bath, Maximize, DollarSign, TrendingUp, Calendar,
-  Users, CheckCircle, Play, X, Calculator, Heart, Share2, Info, Crown, Anchor,
-  FileText, ShieldCheck, Layers, CalendarClock, Receipt, Landmark, SplitSquareHorizontal
+  MapPin, Building2, Bath, Maximize, CheckCircle, Play, Calculator,
+  Share2, Info, FileText, ShieldCheck, CalendarClock, Receipt,
+  SplitSquareHorizontal, Download
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,42 +18,123 @@ import { formatCurrency, formatPercentage, calculateDividend, calculateROI } fro
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAppStore } from "@/stores/appStore";
+import { authStorage, propertiesAPI } from "@/lib/api";
+import type { Property } from "@/types";
+import { useToast } from "@/hooks/use-toast";
 
 export default function AssetDetailPage() {
-  const params = useParams();
+  const params = useParams<{ slug: string }>();
+  const [property, setProperty] = useState<Property | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void propertiesAPI.detail(params.slug).then((response) => {
+      if (!active) return;
+      if (!response.success || !response.data) {
+        setError(response.error || "This asset is unavailable for your investment track.");
+        setIsLoading(false);
+        return;
+      }
+      setProperty(response.data);
+      setError(null);
+      setIsLoading(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [params.slug]);
+
+  if (isLoading) {
+    return <div className="h-[32rem] animate-pulse rounded-2xl bg-slate-100" aria-label="Loading asset details" />;
+  }
+
+  if (!property || error) {
+    return (
+      <Card className="mx-auto max-w-xl border-slate-200">
+        <CardContent className="p-10 text-center">
+          <Building2 className="mx-auto h-12 w-12 text-slate-300" />
+          <h1 className="mt-4 font-display text-2xl font-bold text-slate-900">Asset unavailable</h1>
+          <p className="mt-2 text-sm text-slate-600">{error || "The asset could not be found."}</p>
+          <Link href="/marketplace"><Button className="mt-6">Back to Marketplace</Button></Link>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return <AssetDetailContent property={property} />;
+}
+
+function AssetDetailContent({ property }: { property: Property }) {
   const router = useRouter();
-  const { user, properties } = useAppStore();
-  const property = properties.find((p) => p.id === params.id) || properties[0];
+  const toast = useToast();
+  const { user } = useAppStore();
+  const authenticatedUser = user || authStorage.getUser();
   
   const [selectedFractions, setSelectedFractions] = useState(1);
   const [investmentAmount, setInvestmentAmount] = useState(property.costPerFraction);
   const [holdingPeriod, setHoldingPeriod] = useState(3);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [showVideo, setShowVideo] = useState(false);
-  const [isWishlisted, setIsWishlisted] = useState(false);
+  const [downloadingDocument, setDownloadingDocument] = useState<string | null>(null);
 
-  const fractionsRemaining = property.totalFractions - property.fractionsSold;
+  const fractionsRemaining = Math.max(0, property.totalFractions - property.fractionsSold);
   const investmentValue = selectedFractions * property.costPerFraction;
   const quarterlyDividend = calculateDividend(investmentValue, property.rentalYield, "quarterly");
   const annualDividend = quarterlyDividend * 4;
   const totalROI = calculateROI(investmentValue, property.projectedROI, holdingPeriod);
 
   const handleInvest = () => {
-    if (user && user.kycStatus !== "verified") {
+    if (!authenticatedUser) {
+      router.push("/auth/login");
+      return;
+    }
+    if (authenticatedUser.kycStatus !== "verified") {
       router.push("/profile/kyc");
       return;
     }
+    if (property.status === "closed" || fractionsRemaining < 1 || property.costPerFraction <= 0) return;
     router.push(`/checkout/${property.id}?fractions=${selectedFractions}`);
   };
 
   const handleFractionChange = (fractions: number) => {
-    setSelectedFractions(fractions);
-    setInvestmentAmount(fractions * property.costPerFraction);
+    const nextFractions = Math.min(fractionsRemaining, Math.max(1, Math.floor(Number.isFinite(fractions) ? fractions : 1)));
+    setSelectedFractions(nextFractions);
+    setInvestmentAmount(nextFractions * property.costPerFraction);
   };
 
   const handleAmountChange = (amount: number) => {
-    setInvestmentAmount(amount);
-    setSelectedFractions(Math.floor(amount / property.costPerFraction));
+    if (property.costPerFraction <= 0) return;
+    const nextFractions = Math.min(fractionsRemaining, Math.max(1, Math.floor(amount / property.costPerFraction)));
+    setInvestmentAmount(nextFractions * property.costPerFraction);
+    setSelectedFractions(nextFractions);
+  };
+
+  const handleDocumentDownload = async (document: Property["documents"][number]) => {
+    setDownloadingDocument(document.id);
+    const response = await propertiesAPI.downloadDocument(property.slug, document.id);
+    setDownloadingDocument(null);
+    if (!response.success || !response.data) {
+      toast.error("Download failed", response.error || "Please try again.");
+      return;
+    }
+    const objectUrl = URL.createObjectURL(response.data);
+    const link = window.document.createElement("a");
+    link.href = objectUrl;
+    link.download = document.name;
+    link.click();
+    URL.revokeObjectURL(objectUrl);
+  };
+
+  const handleShare = async () => {
+    const shareData = { title: property.name, text: property.description, url: window.location.href };
+    if (navigator.share) {
+      await navigator.share(shareData).catch(() => undefined);
+      return;
+    }
+    await navigator.clipboard.writeText(window.location.href);
+    toast.success("Link copied", "The asset link is ready to share.");
   };
 
   return (
@@ -73,11 +153,15 @@ export default function AssetDetailPage() {
           {/* Image Gallery */}
           <Card className="overflow-hidden">
             <div className="relative aspect-[16/10] w-full overflow-hidden bg-surface-muted sm:aspect-[16/9]">
-              <img
-                src={property.images[activeImageIndex]}
-                alt={`${property.name} — image ${activeImageIndex + 1} of ${property.images.length}`}
-                className="h-full w-full object-cover"
-              />
+              {property.images[activeImageIndex] ? (
+                <img
+                  src={property.images[activeImageIndex]}
+                  alt={`${property.name} — image ${activeImageIndex + 1} of ${property.images.length}`}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center bg-slate-100"><Building2 className="h-16 w-16 text-slate-300" /></div>
+              )}
 
               {/* Video tour */}
               {property.videoUrl && (
@@ -97,6 +181,14 @@ export default function AssetDetailPage() {
                       <div className="text-center">
                         <Play className="mx-auto h-10 w-10 text-brand-600" />
                         <p className="mt-3 text-sm font-medium text-slate-600">Video tour for {property.name}</p>
+                        <a
+                          href={property.videoUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-4 inline-flex h-11 items-center justify-center rounded-xl bg-emerald-600 px-6 text-sm font-semibold text-white hover:bg-emerald-700"
+                        >
+                          Open Video Tour
+                        </a>
                       </div>
                     </div>
                   </DialogContent>
@@ -106,22 +198,13 @@ export default function AssetDetailPage() {
               {/* Status badge */}
               <div className="absolute left-4 top-4">
                 <Badge variant={property.status === "open" ? "success" : "warning"} className="px-3 py-1.5 text-xs font-semibold">
-                  {property.status === "open" ? "Open for investment" : "Funding in progress"}
+                  {property.status === "open" ? "Open for investment" : property.status === "closed" ? "Allocation closed" : "Funding in progress"}
                 </Badge>
               </div>
 
-              {/* Wishlist & share */}
-              <div className="absolute bottom-4 right-4 flex gap-2">
-                <Button
-                  variant="secondary"
-                  size="icon"
-                  className="rounded-full shadow-lifted"
-                  onClick={() => setIsWishlisted(!isWishlisted)}
-                  aria-label={isWishlisted ? "Remove from wishlist" : "Save to wishlist"}
-                >
-                  <Heart className={`h-5 w-5 ${isWishlisted ? "fill-red-500 text-red-500" : ""}`} />
-                </Button>
-                <Button variant="secondary" size="icon" className="rounded-full shadow-lifted" aria-label="Share asset">
+              {/* Share */}
+              <div className="absolute bottom-4 right-4">
+                <Button variant="secondary" size="icon" className="rounded-full shadow-lifted" aria-label="Share asset" onClick={() => void handleShare()}>
                   <Share2 className="h-5 w-5" />
                 </Button>
               </div>
@@ -450,7 +533,7 @@ export default function AssetDetailPage() {
                                 <span className="text-xs font-bold text-teal-700">{m.releasePct}% release</span>
                               </div>
                               <div className="text-xs text-slate-500">
-                                {new Date(m.targetDate).toLocaleDateString("en-US", { month: "short", year: "numeric" })}
+                                {m.targetDate ? new Date(m.targetDate).toLocaleDateString("en-US", { month: "short", year: "numeric" }) : "Date to be announced"}
                                 {m.description ? ` · ${m.description}` : ""}
                               </div>
                             </div>
@@ -495,18 +578,14 @@ export default function AssetDetailPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-5">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <div className="p-4 bg-slate-50 rounded-xl">
-                  <div className="text-xs text-slate-500 mb-1">Base Price</div>
-                  <div className="text-lg font-bold text-slate-900">{formatCurrency(property.pricing.basePrice)}</div>
-                </div>
-                <div className="p-4 bg-amber-50 rounded-xl">
-                  <div className="text-xs text-amber-600 mb-1">Markup</div>
-                  <div className="text-lg font-bold text-amber-700">{property.pricing.markupPct}%</div>
-                </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="p-4 bg-emerald-50 rounded-xl">
-                  <div className="text-xs text-emerald-600 mb-1">Final Selling Price</div>
+                  <div className="text-xs text-emerald-600 mb-1">Asset Price</div>
                   <div className="text-lg font-bold text-emerald-700">{formatCurrency(property.pricing.finalSellingPrice)}</div>
+                </div>
+                <div className="p-4 bg-slate-50 rounded-xl">
+                  <div className="text-xs text-slate-500 mb-1">Minimum Allocation</div>
+                  <div className="text-lg font-bold text-slate-900">{formatCurrency(property.minimumInvestment || property.costPerFraction)}</div>
                 </div>
               </div>
 
@@ -569,7 +648,7 @@ export default function AssetDetailPage() {
                     </div>
                     <div className="p-4 bg-emerald-50 rounded-xl">
                       <div className="text-sm text-emerald-600 mb-1">First Dividend</div>
-                      <div className="text-lg font-bold text-emerald-700">{new Date(property.firstDividendDate).toLocaleDateString("en-US", { month: "short", year: "numeric" })}</div>
+                      <div className="text-lg font-bold text-emerald-700">{property.firstDividendDate ? new Date(property.firstDividendDate).toLocaleDateString("en-US", { month: "short", year: "numeric" }) : "To be announced"}</div>
                       <div className="text-xs text-emerald-600 mt-1">Payment date</div>
                     </div>
                   </div>
@@ -603,7 +682,7 @@ export default function AssetDetailPage() {
                     <div className="p-4 bg-emerald-50 rounded-xl">
                       <div className="text-sm text-emerald-600 mb-1">First Payout</div>
                       <div className="text-lg font-bold text-emerald-700">
-                        {new Date(property.returns.firstPayoutDate).toLocaleDateString("en-US", { month: "short", year: "numeric" })}
+                        {property.returns.firstPayoutDate ? new Date(property.returns.firstPayoutDate).toLocaleDateString("en-US", { month: "short", year: "numeric" }) : "To be announced"}
                       </div>
                     </div>
                   </div>
@@ -710,48 +789,28 @@ export default function AssetDetailPage() {
                       <div className="font-medium text-slate-900 truncate">{doc.name}</div>
                       <div className="text-xs text-slate-500 capitalize">{doc.type} document</div>
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => void handleDocumentDownload(doc)}
+                      disabled={downloadingDocument === doc.id}
+                      aria-label={`Download ${doc.name}`}
+                    >
+                      <Download className="h-4 w-4" />
+                    </Button>
                   </div>
                 ))}
               </div>
               {property.virtualTours.length > 0 && (
                 <div className="flex flex-wrap gap-3">
                   {property.virtualTours.map((vt) => (
-                    <div key={vt.id} className="w-40">
+                    <a key={vt.id} href={vt.url} target="_blank" rel="noreferrer" className="w-40">
                       <img src={vt.thumbnail} alt={vt.title} className="w-full h-24 object-cover rounded-lg" />
                       <div className="text-xs text-slate-600 mt-1 truncate">{vt.title}</div>
-                    </div>
+                    </a>
                   ))}
                 </div>
               )}
-            </CardContent>
-          </Card>
-
-          {/* Commission Structure */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Receipt className="h-5 w-5 text-emerald-600" />
-                Commission Structure
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <div className="p-4 bg-slate-50 rounded-xl text-center">
-                  <div className="text-xs text-slate-500 mb-1">Lead</div>
-                  <div className="text-2xl font-bold text-slate-900">{property.commission.leadPct}%</div>
-                </div>
-                <div className="p-4 bg-slate-50 rounded-xl text-center">
-                  <div className="text-xs text-slate-500 mb-1">Closer</div>
-                  <div className="text-2xl font-bold text-slate-900">{property.commission.closerPct}%</div>
-                </div>
-                <div className="p-4 bg-amber-50 rounded-xl text-center">
-                  <div className="text-xs text-amber-600 mb-1">Total Commission</div>
-                  <div className="text-2xl font-bold text-amber-700">{property.commission.totalPct}%</div>
-                </div>
-              </div>
-              <p className="text-xs text-slate-500 mt-3">
-                Estimated commission impact per lead allocation: {formatCurrency(property.commission.calculatedAmount)}
-              </p>
             </CardContent>
           </Card>
 
@@ -921,18 +980,18 @@ export default function AssetDetailPage() {
               </div>
 
               {/* CTA Buttons */}
-              <Button variant="premium" className="h-14 w-full text-base sm:text-lg" onClick={handleInvest}>
-                {user && user.kycStatus !== "verified" ? "Complete KYC to Invest" : "Invest Now"}
-              </Button>
               <Button
-                variant="outline"
-                className="w-full"
-                onClick={() => setIsWishlisted(!isWishlisted)}
+                variant="premium"
+                className="h-14 w-full text-base sm:text-lg"
+                onClick={handleInvest}
+                disabled={property.status === "closed" || fractionsRemaining < 1 || property.costPerFraction <= 0}
               >
-                <Heart className={`h-4 w-4 mr-2 ${isWishlisted ? "fill-red-500 text-red-500" : ""}`} />
-                {isWishlisted ? "Saved to Wishlist" : "Save to Wishlist"}
+                {property.status === "closed" || fractionsRemaining < 1
+                  ? "Allocation Closed"
+                  : authenticatedUser && authenticatedUser.kycStatus !== "verified"
+                  ? "Complete KYC to Invest"
+                  : "Invest Now"}
               </Button>
-
               {/* Trust Indicators */}
               <div className="pt-4 border-t border-slate-100">
                 <div className="flex items-center space-x-2 text-sm text-slate-500 mb-2">

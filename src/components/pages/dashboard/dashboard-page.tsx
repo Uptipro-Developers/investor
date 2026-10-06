@@ -1,361 +1,58 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { TrendingUp, DollarSign, PieChart, Wallet, ArrowUpRight, ArrowDownRight, Building2, Calendar, Bell } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { useEffect, useMemo, useState } from "react";
+import { Building2, Calendar, CheckCircle, Clock, DollarSign, PieChart, RefreshCw, Shield, TrendingUp } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Pie, Cell } from "recharts";
-import { dashboardMetrics, investments, dividends, notifications } from "@/data/mockData";
-import { formatCurrency, formatPercentage } from "@/lib/utils";
+import { investmentsAPI } from "@/lib/api";
+import { formatCurrency } from "@/lib/utils";
+import { useAppStore } from "@/stores/appStore";
 import Link from "next/link";
 
-const COLORS = ["#870F73", "#D4A065", "#06b6d4", "#0ea5e9"];
+type InvestmentRecord = { id: string; totalAmount: number | string; status?: string; date?: string; asset?: { id: string; name: string; type?: string | null; location?: string | null; images?: Array<string | { url?: string | null }> } | null };
+const amountOf = (record: InvestmentRecord) => Number(record.totalAmount) || 0;
+const imageOf = (record: InvestmentRecord) => { const image = record.asset?.images?.[0]; return typeof image === "string" ? image : image?.url || undefined; };
 
 export default function DashboardPage() {
-  const recentNotifications = notifications.slice(0, 3);
-  const upcomingDividends = dividends.filter((d) => d.status === "upcoming" || d.status === "pending").slice(0, 3);
+  const user = useAppStore((state) => state.user);
+  const [records, setRecords] = useState<InvestmentRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const load = async () => {
+    setLoading(true); setError("");
+    const response = await investmentsAPI.list();
+    setLoading(false);
+    if (!response.success || !response.data) { setError(response.error || "Unable to load your dashboard."); return; }
+    setRecords(Array.isArray(response.data) ? response.data : []);
+  };
+  useEffect(() => { void load(); }, []);
+  const totalInvested = useMemo(() => records.reduce((sum, record) => sum + amountOf(record), 0), [records]);
+  const completed = records.filter((record) => record.status === "COMPLETED");
+  const allocation = useMemo(() => {
+    const totals = new Map<string, number>();
+    completed.forEach((record) => { const key = record.asset?.type || "Other"; totals.set(key, (totals.get(key) || 0) + amountOf(record)); });
+    return [...totals.entries()].map(([name, value]) => ({ name, value, percent: totalInvested ? Math.round((value / totalInvested) * 100) : 0 }));
+  }, [completed, totalInvested]);
 
-  return (
-    <div className="space-y-8">
-      {/* Page Header */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Dashboard</h1>
-          <p className="mt-1 text-sm text-slate-500">Here&apos;s your investment overview</p>
-        </div>
-        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
-          <Link href="/marketplace" className="w-full sm:w-auto">
-            <Button variant="outline" className="w-full sm:w-auto">
-              <Building2 className="mr-2 h-4 w-4" /> Browse properties
-            </Button>
-          </Link>
-          <Link href="/wallet" className="w-full sm:w-auto">
-            <Button className="w-full sm:w-auto">
-              <Wallet className="mr-2 h-4 w-4" /> Add funds
-            </Button>
-          </Link>
-        </div>
-      </div>
+  if (loading) return <Card><CardContent className="flex items-center justify-center gap-3 p-12 text-slate-600"><Clock className="h-5 w-5 animate-pulse" /> Loading your dashboard…</CardContent></Card>;
+  if (error) return <Card className="border-red-200"><CardContent className="p-10 text-center"><p className="font-semibold text-red-700">{error}</p><Button className="mt-4" onClick={() => void load()}><RefreshCw className="mr-2 h-4 w-4" />Try again</Button></CardContent></Card>;
 
-      {/* Metrics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0 }}
-        >
-          <Card className="relative overflow-hidden hover:shadow-[0_8px_16px_-4px_rgb(15_23_42/0.08),0_16px_32px_-8px_rgb(15_23_42/0.10)] transition-shadow duration-300">
-            <div className="absolute inset-x-0 top-0 h-1 bg-emerald-500" />
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-medium text-slate-600">Total Invested</span>
-                <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center">
-                  <DollarSign className="h-4.5 w-4.5 text-emerald-600" />
-                </div>
-              </div>
-              <div className="font-display text-3xl font-bold text-slate-900 tracking-tight">{formatCurrency(dashboardMetrics.totalInvested)}</div>
-              <div className="flex items-center mt-3 text-[13px] text-emerald-600">
-                <ArrowUpRight className="h-4 w-4 mr-1" />
-                <span className="font-medium">+12.5% from last month</span>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-        >
-          <Card className="relative overflow-hidden hover:shadow-[0_8px_16px_-4px_rgb(15_23_42/0.08),0_16px_32px_-8px_rgb(15_23_42/0.10)] transition-shadow duration-300">
-            <div className="absolute inset-x-0 top-0 h-1 bg-teal-500" />
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-medium text-slate-600">Portfolio Value</span>
-                <div className="w-9 h-9 rounded-lg bg-teal-50 flex items-center justify-center">
-                  <TrendingUp className="h-4.5 w-4.5 text-teal-600" />
-                </div>
-              </div>
-              <div className="font-display text-3xl font-bold text-slate-900 tracking-tight">{formatCurrency(dashboardMetrics.portfolioValue)}</div>
-              <div className="flex items-center mt-3 text-[13px] text-emerald-600">
-                <ArrowUpRight className="h-4 w-4 mr-1" />
-                <span className="font-medium">+8.6% growth</span>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-        >
-          <Card className="relative overflow-hidden hover:shadow-[0_8px_16px_-4px_rgb(15_23_42/0.08),0_16px_32px_-8px_rgb(15_23_42/0.10)] transition-shadow duration-300">
-            <div className="absolute inset-x-0 top-0 h-1 bg-blue-500" />
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-medium text-slate-600">Annual Returns</span>
-                <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center">
-                  <PieChart className="h-4.5 w-4.5 text-blue-600" />
-                </div>
-              </div>
-              <div className="font-display text-3xl font-bold text-slate-900 tracking-tight">{formatCurrency(dashboardMetrics.projectedAnnualReturns)}</div>
-              <div className="text-[13px] text-slate-500 mt-3">Projected for next 12 months</div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-        >
-          <Card className="relative overflow-hidden hover:shadow-[0_8px_16px_-4px_rgb(15_23_42/0.08),0_16px_32px_-8px_rgb(15_23_42/0.10)] transition-shadow duration-300">
-            <div className="absolute inset-x-0 top-0 h-1 bg-amber-500" />
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-medium text-slate-600">Dividends Earned</span>
-                <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center">
-                  <Wallet className="h-4.5 w-4.5 text-amber-600" />
-                </div>
-              </div>
-              <div className="font-display text-3xl font-bold text-slate-900 tracking-tight">{formatCurrency(dashboardMetrics.totalDividendsEarned)}</div>
-              <div className="flex items-center mt-3 text-[13px] text-emerald-600">
-                <ArrowUpRight className="h-4 w-4 mr-1" />
-                <span className="font-medium">Lifetime earnings</span>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      </div>
-
-      {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Portfolio Growth Chart */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-          className="lg:col-span-2"
-        >
-          <Card>
-            <CardHeader>
-              <CardTitle>Portfolio Growth</CardTitle>
-              <CardDescription>Your investment value over time</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={dashboardMetrics.portfolioGrowth}>
-                    <defs>
-                      <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#870F73" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#870F73" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="month" stroke="#64748b" />
-                    <YAxis stroke="#64748b" tickFormatter={(value) => `₦${value / 1000000}M`} />
-                    <Tooltip
-                      formatter={(value) => [formatCurrency(Number(value)), "Value"]}
-                      contentStyle={{
-                        backgroundColor: "white",
-                        border: "1px solid #e2e8f0",
-                        borderRadius: "12px",
-                        boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="value"
-                      stroke="#870F73"
-                      strokeWidth={3}
-                      fillOpacity={1}
-                      fill="url(#colorValue)"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        {/* Asset Allocation */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
-        >
-          <Card>
-            <CardHeader>
-              <CardTitle>Asset Allocation</CardTitle>
-              <CardDescription>Distribution by property type</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="h-48">
-                <ResponsiveContainer width="100%" height="100%">
-                  <RechartsPieChart>
-                    <Pie
-                      data={dashboardMetrics.assetAllocation}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={50}
-                      outerRadius={80}
-                      paddingAngle={5}
-                      dataKey="value"
-                    >
-                      {dashboardMetrics.assetAllocation.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </RechartsPieChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="space-y-2 mt-4">
-                {dashboardMetrics.assetAllocation.map((item, index) => (
-                  <div key={item.name} className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      <div
-                        className="w-3 h-3 rounded-full"
-                        style={{ backgroundColor: COLORS[index % COLORS.length] }}
-                      />
-                      <span className="text-sm text-slate-600">{item.name}</span>
-                    </div>
-                    <span className="text-sm font-medium text-slate-900">{formatPercentage(item.value)}</span>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      </div>
-
-      {/* Bottom Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Active Investments */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.6 }}
-        >
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Active Investments</CardTitle>
-                <CardDescription>Your current property holdings</CardDescription>
-              </div>
-              <Link href="/portfolio">
-                <Button variant="ghost" size="sm">View All</Button>
-              </Link>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {investments.map((investment) => (
-                  <Link key={investment.id} href={`/assets/${investment.property.id}`}>
-                    <div className="flex items-center space-x-4 p-4 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer">
-                      <img
-                        src={investment.property.images[0]}
-                        alt={investment.property.name}
-                        className="w-16 h-16 rounded-lg object-cover"
-                      />
-                      <div className="flex-1">
-                        <h4 className="font-semibold text-slate-900">{investment.property.name}</h4>
-                        <p className="text-sm text-slate-500">{investment.property.location}</p>
-                        <div className="flex items-center mt-2 space-x-4">
-                          <span className="text-sm text-slate-600">
-                            Invested: <span className="font-medium text-slate-900">{formatCurrency(investment.amountInvested)}</span>
-                          </span>
-                          <span className="text-sm text-emerald-600">
-                            ROI: <span className="font-medium">{formatPercentage(investment.roi)}</span>
-                          </span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <Badge variant={investment.roi >= 0 ? "success" : "danger"}>
-                          {investment.roi >= 0 ? "+" : ""}{formatPercentage(investment.roi)}
-                        </Badge>
-                      </div>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        {/* Upcoming Dividends & Notifications */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.7 }}
-          className="space-y-6"
-        >
-          {/* Upcoming Dividends */}
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Upcoming Dividends</CardTitle>
-                <CardDescription>Expected dividend payments</CardDescription>
-              </div>
-              <Link href="/dividends">
-                <Button variant="ghost" size="sm">View All</Button>
-              </Link>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {upcomingDividends.map((dividend) => (
-                  <div key={dividend.id} className="flex items-center justify-between p-3 rounded-lg bg-emerald-50">
-                    <div className="flex items-center space-x-3">
-                      <Calendar className="h-5 w-5 text-emerald-600" />
-                      <div>
-                        <p className="font-medium text-slate-900">{dividend.propertyName}</p>
-                        <p className="text-sm text-slate-500">{dividend.period}</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-semibold text-emerald-600">{formatCurrency(dividend.amount)}</p>
-                      <p className="text-xs text-slate-500">{new Date(dividend.paymentDate).toLocaleDateString()}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Recent Notifications */}
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Notifications</CardTitle>
-                <CardDescription>Recent updates and alerts</CardDescription>
-              </div>
-              <Link href="/notifications">
-                <Button variant="ghost" size="sm" className="flex items-center">
-                  <Bell className="h-4 w-4 mr-1" /> View All
-                </Button>
-              </Link>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {recentNotifications.map((notification) => (
-                  <Link key={notification.id} href={notification.actionUrl || "#"}>
-                    <div className={`flex items-start space-x-3 p-3 rounded-lg transition-colors ${notification.read ? "bg-slate-50" : "bg-emerald-50"}`}>
-                      <div className={`w-2 h-2 rounded-full mt-2 ${notification.read ? "bg-slate-300" : "bg-emerald-500"}`} />
-                      <div className="flex-1">
-                        <p className="font-medium text-slate-900 text-sm">{notification.title}</p>
-                        <p className="text-sm text-slate-500">{notification.message}</p>
-                      </div>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      </div>
+  return <div className="space-y-8">
+    <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><h1 className="font-display text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Dashboard</h1><p className="mt-1 text-sm text-slate-500">Your verified investment activity and account status</p></div><div className="flex gap-2"><Link href="/marketplace"><Button variant="outline"><Building2 className="mr-2 h-4 w-4" />Browse assets</Button></Link><Link href="/profile/kyc"><Button><Shield className="mr-2 h-4 w-4" />KYC profile</Button></Link></div></div>
+    <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-4">
+      <Metric title="Total Invested" value={formatCurrency(totalInvested)} note={`${completed.length} completed transaction${completed.length === 1 ? "" : "s"}`} icon={<DollarSign className="h-5 w-5 text-emerald-600" />} />
+      <Metric title="Portfolio Transactions" value={String(records.length)} note="Recorded investment transactions" icon={<PieChart className="h-5 w-5 text-blue-600" />} />
+      <Metric title="Portfolio Value" value="Pending valuation" note="Valuation data is not available yet" icon={<TrendingUp className="h-5 w-5 text-teal-600" />} />
+      <Metric title="Dividends" value="No data yet" note="Dividend records are not connected yet" icon={<Calendar className="h-5 w-5 text-amber-600" />} />
     </div>
-  );
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <Card className="lg:col-span-2"><CardHeader><CardTitle>Recent investments</CardTitle></CardHeader><CardContent>{records.length === 0 ? <EmptyState /> : <div className="space-y-3">{records.slice(0, 5).map((record) => <Link key={record.id} href={record.asset?.id ? `/assets/${record.asset.id}` : "/portfolio"} className="block"><div className="flex items-center gap-4 rounded-xl bg-slate-50 p-3 hover:bg-slate-100"><div className="flex h-14 w-16 items-center justify-center overflow-hidden rounded-lg bg-slate-200">{imageOf(record) ? <img src={imageOf(record)} alt={record.asset?.name || "Investment"} className="h-full w-full object-cover" /> : <Building2 className="h-6 w-6 text-slate-400" />}</div><div className="min-w-0 flex-1"><p className="truncate font-semibold text-slate-900">{record.asset?.name || "Investment"}</p><p className="text-sm text-slate-500">{record.asset?.location || "Urbco asset"}</p><p className="mt-1 text-xs text-slate-500">{record.date ? new Date(record.date).toLocaleDateString() : "—"}</p></div><div className="text-right"><Badge variant={record.status === "COMPLETED" ? "success" : "secondary"}>{record.status || "Pending"}</Badge><p className="mt-1 font-semibold text-slate-900">{formatCurrency(amountOf(record))}</p></div></div></Link>)}</div>}{records.length > 5 && <Link href="/portfolio" className="mt-4 inline-block text-sm font-semibold text-emerald-700">View all investments →</Link>}</CardContent></Card>
+      <Card><CardHeader><CardTitle>Account status</CardTitle></CardHeader><CardContent className="space-y-4"><div className="rounded-xl bg-slate-50 p-4"><p className="text-xs text-slate-500">KYC verification</p><div className="mt-2 flex items-center gap-2"><Badge variant={user?.kycStatus === "verified" ? "success" : "secondary"}>{user?.kycStatus === "verified" ? "Verified" : user?.kycStatus === "under_review" ? "Under review" : "Action required"}</Badge>{user?.kycStatus === "verified" && <CheckCircle className="h-4 w-4 text-emerald-600" />}</div></div><Link href="/profile/kyc"><Button variant="outline" className="w-full">View KYC status</Button></Link><p className="text-xs leading-relaxed text-slate-500">Investments are recorded only after payment verification and require completed KYC.</p></CardContent></Card>
+    </div>
+    <Card><CardHeader><CardTitle>Asset allocation</CardTitle></CardHeader><CardContent>{allocation.length === 0 ? <p className="py-6 text-sm text-slate-500">Allocation will appear after you have a completed investment.</p> : <div className="grid gap-3 sm:grid-cols-2">{allocation.map((item) => <div key={item.name} className="rounded-xl border border-slate-200 p-4"><div className="flex justify-between"><span className="font-medium text-slate-700">{item.name}</span><span className="font-semibold text-slate-900">{item.percent}%</span></div><div className="mt-2 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full bg-emerald-500" style={{ width: `${item.percent}%` }} /></div><p className="mt-2 text-xs text-slate-500">{formatCurrency(item.value)}</p></div>)}</div>}</CardContent></Card>
+  </div>;
 }
+
+function Metric({ title, value, note, icon }: { title: string; value: string; note: string; icon: React.ReactNode }) { return <Card className="relative overflow-hidden"><div className="absolute inset-x-0 top-0 h-1 bg-emerald-500" /><CardContent className="pt-6"><div className="mb-3 flex items-center justify-between"><span className="text-sm font-medium text-slate-600">{title}</span><div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-50">{icon}</div></div><div className="font-display text-2xl font-bold tracking-tight text-slate-900">{value}</div><p className="mt-2 text-xs text-slate-500">{note}</p></CardContent></Card>; }
+function EmptyState() { return <div className="py-10 text-center text-slate-500"><Building2 className="mx-auto mb-3 h-8 w-8" /><p>No investment transactions recorded yet.</p><Link href="/marketplace" className="mt-3 inline-block text-sm font-semibold text-emerald-700">Explore the marketplace</Link></div>; }

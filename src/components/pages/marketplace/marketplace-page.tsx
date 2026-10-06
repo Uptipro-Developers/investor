@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Building2, MapPin, TrendingUp, DollarSign, Users, Search, Crown, Anchor, Grid, List, Layers } from "lucide-react";
+import { Building2, MapPin, Search, Crown, Anchor, Grid, List } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +16,6 @@ import Link from "next/link";
 export default function MarketplacePage() {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [searchQuery, setSearchQuery] = useState("");
-  const [trackFilter, setTrackFilter] = useState<"all" | "foundry" | "harbor">("all");
   const [stageFilter, setStageFilter] = useState<"all" | "pre-development" | "post-development">("all");
   const [filters, setFilters] = useState({
     location: "all",
@@ -24,17 +23,18 @@ export default function MarketplacePage() {
     status: "all",
   });
 
-  const { properties } = useAppStore();
+  const { properties, propertiesLoading, propertiesError, loadProperties, user } = useAppStore();
+
+  useEffect(() => {
+    void loadProperties();
+  }, [loadProperties]);
+
+  const activeTrack = user?.investorTrack || properties[0]?.targetTrack;
 
   const filteredProperties = properties.filter((property) => {
     const matchesSearch =
       property.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       property.location.toLowerCase().includes(searchQuery.toLowerCase());
-
-    const matchesTrack =
-      trackFilter === "all" ||
-      property.targetTrack === "both" ||
-      property.targetTrack === trackFilter;
 
     const matchesStage =
       stageFilter === "all" || property.developmentStage === stageFilter;
@@ -46,7 +46,7 @@ export default function MarketplacePage() {
     const matchesStatus =
       !filters.status || filters.status === "all" || property.status === filters.status;
 
-    return matchesSearch && matchesTrack && matchesStage && matchesLocation && matchesType && matchesStatus;
+    return matchesSearch && matchesStage && matchesLocation && matchesType && matchesStatus;
   });
 
   return (
@@ -58,34 +58,9 @@ export default function MarketplacePage() {
           <p className="mt-1 text-sm text-slate-500">Browse trustee-secured Nigerian real estate allocations</p>
         </div>
 
-        {/* Track toggle */}
-        <div
-          className="inline-flex w-full gap-1 rounded-xl border border-line bg-surface-sunken p-1 md:w-auto"
-          role="tablist"
-          aria-label="Filter by investment track"
-        >
-          {(
-            [
-              { key: "all", label: "All" },
-              { key: "foundry", label: "Urbco Foundry", icon: Crown },
-              { key: "harbor", label: "Urbco Harbour", icon: Anchor },
-            ] as { key: "all" | "foundry" | "harbor"; label: string; icon?: typeof Crown }[]
-          ).map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTrackFilter(t.key)}
-              role="tab"
-              aria-selected={trackFilter === t.key}
-              className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors duration-200 md:flex-none ${
-                trackFilter === t.key
-                  ? "bg-white text-slate-900 shadow-soft"
-                  : "text-slate-500 hover:text-slate-900"
-              }`}
-            >
-              {t.icon && <t.icon className="h-3.5 w-3.5" />}
-              {t.label}
-            </button>
-          ))}
+        <div className="inline-flex items-center gap-2 rounded-xl border border-line bg-surface-sunken px-4 py-2 text-sm font-semibold text-slate-700">
+          {activeTrack === "foundry" ? <Crown className="h-4 w-4 text-accent-700" /> : <Anchor className="h-4 w-4 text-brand-700" />}
+          Your track: {activeTrack === "foundry" ? "Urbco Foundry" : activeTrack === "harbor" ? "Urbco Harbour" : "Loading"}
         </div>
       </div>
 
@@ -107,7 +82,7 @@ export default function MarketplacePage() {
             {/* Filter Controls */}
             <div className="flex flex-wrap gap-3">
               {/* Development Stage Filter */}
-              <Select value={stageFilter} onValueChange={(val: any) => setStageFilter(val)}>
+              <Select value={stageFilter} onValueChange={(value) => setStageFilter(value as typeof stageFilter)}>
                 <SelectTrigger className="w-44 bg-slate-50">
                   <SelectValue placeholder="Development Stage" />
                 </SelectTrigger>
@@ -175,28 +150,39 @@ export default function MarketplacePage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-sm text-slate-600">
         <p>
           Showing <span className="font-bold text-slate-900">{filteredProperties.length}</span> properties
-          {trackFilter !== "all" && (
-            <span> in <strong className="text-brand-700">{trackFilter === "foundry" ? "Urbco Foundry" : "Urbco Harbour"}</strong></span>
-          )}
           {stageFilter !== "all" && (
             <span> (<strong className="text-brand-700">{stageFilter.replace("-", " ")}</strong> stage)</span>
           )}
         </p>
 
-        {trackFilter === "foundry" && (
+        {activeTrack === "foundry" && (
           <span className="rounded-full border border-accent-200 bg-accent-50 px-3 py-1 text-xs font-medium text-accent-800">
             Urbco Foundry — mega assets from ₦200M
           </span>
         )}
-        {trackFilter === "harbor" && (
+        {activeTrack === "harbor" && (
           <span className="rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">
             Urbco Harbour — entry from ₦100K
           </span>
         )}
       </div>
 
+      {propertiesLoading && (
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3" aria-label="Loading marketplace assets">
+          {[1, 2, 3].map((item) => <div key={item} className="h-[28rem] animate-pulse rounded-2xl bg-slate-100" />)}
+        </div>
+      )}
+
+      {propertiesError && !propertiesLoading && (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-8 text-center">
+          <h3 className="font-semibold text-red-900">Marketplace unavailable</h3>
+          <p className="mt-1 text-sm text-red-700">{propertiesError}</p>
+          <Button variant="outline" className="mt-4" onClick={() => void loadProperties()}>Try Again</Button>
+        </div>
+      )}
+
       {/* Properties Grid View */}
-      {viewMode === "grid" ? (
+      {!propertiesLoading && !propertiesError && (viewMode === "grid" ? (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredProperties.map((property, index) => (
             <motion.div
@@ -205,14 +191,18 @@ export default function MarketplacePage() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: index * 0.05 }}
             >
-              <Link href={`/assets/${property.id}`}>
+              <Link href={`/assets/${property.slug}`}>
                 <Card className="overflow-hidden group cursor-pointer hover:shadow-xl transition-all duration-300 h-full border border-slate-200">
                   <div className="relative h-56 overflow-hidden">
-                    <img
-                      src={property.images[0]}
-                      alt={property.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                    />
+                    {property.images[0] ? (
+                      <img
+                        src={property.images[0]}
+                        alt={property.name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center bg-slate-100"><Building2 className="h-12 w-12 text-slate-300" /></div>
+                    )}
 
                     {/* Stage badge only — keep the image clean */}
                     <div className="absolute left-3 top-3">
@@ -326,16 +316,20 @@ export default function MarketplacePage() {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: index * 0.05 }}
             >
-              <Link href={`/assets/${property.id}`}>
+              <Link href={`/assets/${property.slug}`}>
                 <Card className="group cursor-pointer hover:shadow-lg transition-all duration-300 border border-slate-200">
                   <CardContent className="p-0">
                     <div className="flex flex-col md:flex-row">
                       <div className="relative md:w-80 h-48 md:h-auto overflow-hidden">
-                        <img
-                          src={property.images[0]}
-                          alt={property.name}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                        />
+                        {property.images[0] ? (
+                          <img
+                            src={property.images[0]}
+                            alt={property.name}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                          />
+                        ) : (
+                          <div className="flex h-full items-center justify-center bg-slate-100"><Building2 className="h-12 w-12 text-slate-300" /></div>
+                        )}
                         <div className="absolute left-3 top-3 flex gap-1.5">
                           <Badge className={property.developmentStage === "pre-development" ? "bg-brand-600 text-white" : "bg-emerald-600 text-white"}>
                             {property.developmentStage === "pre-development" ? "Pre-dev" : "Post-dev"}
@@ -413,10 +407,10 @@ export default function MarketplacePage() {
             </motion.div>
           ))}
         </div>
-      )}
+      ))}
 
       {/* Empty State */}
-      {filteredProperties.length === 0 && (
+      {!propertiesLoading && !propertiesError && filteredProperties.length === 0 && (
         <div className="text-center py-20 bg-white rounded-2xl border border-slate-200">
           <Building2 className="h-16 w-16 text-slate-300 mx-auto mb-4" />
           <h3 className="text-xl font-semibold text-slate-900 mb-2">No properties matched your search</h3>
@@ -425,7 +419,6 @@ export default function MarketplacePage() {
             variant="outline"
             className="mt-4"
             onClick={() => {
-              setTrackFilter("all");
               setStageFilter("all");
               setSearchQuery("");
             }}

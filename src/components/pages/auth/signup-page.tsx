@@ -9,9 +9,37 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { authAPI, InvestorRegistrationRequest } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
 
 type Track = "foundry" | "harbor";
 type Entity = "individual" | "family-office" | "institution";
+type SignupFormState = {
+  fullName: string;
+  email: string;
+  phone: string;
+  password: string;
+  confirmPassword: string;
+  country: string;
+  dateOfBirth: string;
+  nationality: string;
+  idType: string;
+  sourceOfFunds: string;
+  employmentStatus: string;
+  entityName: string;
+  aumRange: string;
+  registrationNumber: string;
+  officeCountry: string;
+  institutionType: string;
+  institutionName: string;
+  cacNumber: string;
+  taxId: string;
+  regulatorName: string;
+  ticketSize: string;
+  targetAssets: string;
+  horizon: string;
+  structure: string;
+};
 
 const TRACKS = [
   {
@@ -57,6 +85,27 @@ const INSTITUTION_TYPES = [
 
 const STRUCTURES = ["Equity", "Debt / note", "Revenue share", "Joint venture"];
 
+const TICKET_RANGES: Record<string, { minimum: number; maximum?: number }> = {
+  "₦200M – ₦500M": { minimum: 200_000_000, maximum: 500_000_000 },
+  "₦500M – ₦1B": { minimum: 500_000_000, maximum: 1_000_000_000 },
+  "₦1B – ₦5B": { minimum: 1_000_000_000, maximum: 5_000_000_000 },
+  "₦5B+": { minimum: 5_000_000_000 },
+};
+
+const HORIZON_RANGES: Record<string, { minimum: number; maximum?: number }> = {
+  "1 – 3 years": { minimum: 12, maximum: 36 },
+  "3 – 5 years": { minimum: 36, maximum: 60 },
+  "5 – 10 years": { minimum: 60, maximum: 120 },
+  "10+ years": { minimum: 120 },
+};
+
+const AUM_RANGES: Record<string, { minimum: number; maximum?: number }> = {
+  "$1M – $10M": { minimum: 1_000_000, maximum: 10_000_000 },
+  "$10M – $50M": { minimum: 10_000_000, maximum: 50_000_000 },
+  "$50M – $200M": { minimum: 50_000_000, maximum: 200_000_000 },
+  "$200M+": { minimum: 200_000_000 },
+};
+
 function Section({ step, title, children }: { step: number; title: string; children: React.ReactNode }) {
   return (
     <fieldset>
@@ -65,6 +114,62 @@ function Section({ step, title, children }: { step: number; title: string; child
       </legend>
       {children}
     </fieldset>
+  );
+}
+
+function InvestmentProfileSection({
+  step,
+  form,
+  set,
+}: {
+  step: number;
+  form: SignupFormState;
+  set: (patch: Partial<SignupFormState>) => void;
+}) {
+  return (
+    <Section step={step} title="Your investment profile">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="ticket" className="text-slate-700">Typical allocation</Label>
+          <Select value={form.ticketSize} onValueChange={(v) => set({ ticketSize: v })}>
+            <SelectTrigger id="ticket" className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {Object.keys(TICKET_RANGES).map((range) => <SelectItem key={range} value={range}>{range}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="target" className="text-slate-700">Preferred assets</Label>
+          <Select value={form.targetAssets} onValueChange={(v) => set({ targetAssets: v })}>
+            <SelectTrigger id="target" className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="Income-producing">Income-producing</SelectItem>
+              <SelectItem value="Development">Development</SelectItem>
+              <SelectItem value="Completed / stabilised">Completed / stabilised</SelectItem>
+              <SelectItem value="Mixed portfolio">Mixed portfolio</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="horizon" className="text-slate-700">Investment horizon</Label>
+          <Select value={form.horizon} onValueChange={(v) => set({ horizon: v })}>
+            <SelectTrigger id="horizon" className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {Object.keys(HORIZON_RANGES).map((range) => <SelectItem key={range} value={range}>{range}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="structure" className="text-slate-700">Preferred structure</Label>
+          <Select value={form.structure} onValueChange={(v) => set({ structure: v })}>
+            <SelectTrigger id="structure" className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {STRUCTURES.map((structure) => <SelectItem key={structure} value={structure}>{structure}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+    </Section>
   );
 }
 
@@ -79,6 +184,7 @@ export default function SignupPage() {
 function SignupContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const toast = useToast();
   const initialTrack: Track = searchParams?.get("track") === "foundry" ? "foundry" : "harbor";
 
   const [track, setTrack] = useState<Track>(initialTrack);
@@ -87,7 +193,7 @@ function SignupContent() {
   const [isLoading, setIsLoading] = useState(false);
   const [agreed, setAgreed] = useState(false);
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<SignupFormState>({
     // shared account
     fullName: "", email: "", phone: "", password: "", confirmPassword: "", country: "NG",
     // individual
@@ -118,11 +224,77 @@ function SignupContent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!agreed || !passwordsMatch) return;
+    if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(form.password)) {
+      toast.error("Choose a stronger password", "Use at least 8 characters with uppercase, lowercase, a number, and a special character.");
+      return;
+    }
+
+    const countryCode = isFamilyOffice ? form.officeCountry : form.country;
+    const compactPhone = form.phone.replace(/[\s()-]/g, "");
+    const phone = countryCode === "NG" && compactPhone.startsWith("0")
+      ? `+234${compactPhone.slice(1)}`
+      : compactPhone;
+    const ticket = TICKET_RANGES[form.ticketSize];
+    const horizon = HORIZON_RANGES[form.horizon];
+    const aum = AUM_RANGES[form.aumRange];
+    const entityType: InvestorRegistrationRequest["entityType"] =
+      entity === "family-office" ? "FAMILY_OFFICE" : entity.toUpperCase() as InvestorRegistrationRequest["entityType"];
+
+    const payload: InvestorRegistrationRequest = {
+      track: track.toUpperCase() as InvestorRegistrationRequest["track"],
+      entityType,
+      account: {
+        fullName: form.fullName.trim(),
+        email: form.email.trim().toLowerCase(),
+        phone,
+        password: form.password,
+        countryCode,
+      },
+      individual: entity === "individual" ? {
+        dateOfBirth: form.dateOfBirth,
+        nationality: form.nationality,
+        primaryIdType: form.idType,
+        sourceOfFunds: form.sourceOfFunds,
+        employmentStatus: form.employmentStatus,
+      } : undefined,
+      entity: entity !== "individual" ? {
+        legalName: isFamilyOffice ? form.entityName.trim() : form.institutionName.trim(),
+        registrationNumber: (isFamilyOffice ? form.registrationNumber : form.cacNumber).trim() || undefined,
+        countryCode,
+        institutionType: isInstitution ? form.institutionType : "Family office",
+        taxId: isInstitution ? form.taxId.trim() : undefined,
+        regulatorName: isInstitution ? form.regulatorName.trim() || undefined : undefined,
+        representativeDateOfBirth: isFamilyOffice ? form.dateOfBirth : undefined,
+        aumMin: isFamilyOffice ? aum?.minimum : undefined,
+        aumMax: isFamilyOffice ? aum?.maximum : undefined,
+        aumCurrency: isFamilyOffice ? "USD" : undefined,
+      } : undefined,
+      investmentPreference: track === "foundry" ? {
+        currency: "NGN",
+        minimumTicket: ticket.minimum,
+        maximumTicket: ticket.maximum,
+        preferredAsset: form.targetAssets.toUpperCase().replace(/[^A-Z0-9]+/g, "_"),
+        horizonMinMonths: horizon.minimum,
+        horizonMaxMonths: horizon.maximum,
+        preferredStructure: form.structure.toUpperCase().replace(/[^A-Z0-9]+/g, "_"),
+      } : undefined,
+      consent: {
+        termsVersion: "2026-10-01",
+        privacyVersion: "2026-10-01",
+      },
+    };
+
     setIsLoading(true);
-    await new Promise((r) => setTimeout(r, 1200));
+    const response = await authAPI.registerInvestor(payload);
     setIsLoading(false);
-    // Institutions complete full KYB on the dedicated onboarding route after OTP.
-    router.push(isInstitution ? "/onboard/institutional" : "/auth/otp-verify");
+    if (!response.success) {
+      toast.error("Could not create account", response.error || "Please review your details and try again.");
+      return;
+    }
+
+    sessionStorage.setItem("urbco_pending_email", payload.account.email);
+    toast.success("Account created", "Enter the verification code sent to your email.");
+    router.push(`/auth/otp-verify?email=${encodeURIComponent(payload.account.email)}`);
   };
 
   return (
@@ -288,10 +460,11 @@ function SignupContent() {
               </Section>
 
               {/* 4 — Track & category specific questions */}
-              {isHarbour ? (
-                <Section step={4} title="About you">
+              {entity === "individual" ? (
+                <>
+                  <Section step={4} title="About you">
                   <div className="space-y-4">
-                    <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="grid gap-4 sm:grid-cols-3">
                       <div className="space-y-1.5">
                         <Label htmlFor="dob" className="text-slate-700">Date of birth</Label>
                         <Input id="dob" type="date" value={form.dateOfBirth} onChange={(e) => set({ dateOfBirth: e.target.value })} required />
@@ -306,6 +479,10 @@ function SignupContent() {
                             <SelectItem value="Driver's licence">Driver&apos;s licence</SelectItem>
                           </SelectContent>
                         </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="nationality" className="text-slate-700">Nationality</Label>
+                        <Input id="nationality" value={form.nationality} onChange={(e) => set({ nationality: e.target.value })} required />
                       </div>
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
@@ -336,7 +513,9 @@ function SignupContent() {
                       </div>
                     </div>
                   </div>
-                </Section>
+                  </Section>
+                  {!isHarbour && <InvestmentProfileSection step={5} form={form} set={set} />}
+                </>
               ) : (
                 <>
                   {isFamilyOffice && (
@@ -368,7 +547,7 @@ function SignupContent() {
                             </Select>
                           </div>
                           <div className="space-y-1.5">
-                            <Label htmlFor="dof" className="text-slate-700">Date of birth</Label>
+                            <Label htmlFor="dof" className="text-slate-700">Representative date of birth</Label>
                             <Input id="dof" type="date" value={form.dateOfBirth} onChange={(e) => set({ dateOfBirth: e.target.value })} required />
                           </div>
                         </div>
@@ -427,55 +606,7 @@ function SignupContent() {
                     </Section>
                   )}
 
-                  <Section step={isInstitution || isFamilyOffice ? 5 : 4} title="Your investment profile">
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <div className="space-y-1.5">
-                        <Label htmlFor="ticket" className="text-slate-700">Typical allocation</Label>
-                        <Select value={form.ticketSize} onValueChange={(v) => set({ ticketSize: v })}>
-                          <SelectTrigger id="ticket" className="w-full"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="₦200M – ₦500M">₦200M – ₦500M</SelectItem>
-                            <SelectItem value="₦500M – ₦1B">₦500M – ₦1B</SelectItem>
-                            <SelectItem value="₦1B – ₦5B">₦1B – ₦5B</SelectItem>
-                            <SelectItem value="₦5B+">₦5B+</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="target" className="text-slate-700">Preferred assets</Label>
-                        <Select value={form.targetAssets} onValueChange={(v) => set({ targetAssets: v })}>
-                          <SelectTrigger id="target" className="w-full"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Income-producing">Income-producing</SelectItem>
-                            <SelectItem value="Development">Development</SelectItem>
-                            <SelectItem value="Completed / stabilised">Completed / stabilised</SelectItem>
-                            <SelectItem value="Mixed portfolio">Mixed portfolio</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="horizon" className="text-slate-700">Investment horizon</Label>
-                        <Select value={form.horizon} onValueChange={(v) => set({ horizon: v })}>
-                          <SelectTrigger id="horizon" className="w-full"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="1 – 3 years">1 – 3 years</SelectItem>
-                            <SelectItem value="3 – 5 years">3 – 5 years</SelectItem>
-                            <SelectItem value="5 – 10 years">5 – 10 years</SelectItem>
-                            <SelectItem value="10+ years">10+ years</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="structure" className="text-slate-700">Preferred structure</Label>
-                        <Select value={form.structure} onValueChange={(v) => set({ structure: v })}>
-                          <SelectTrigger id="structure" className="w-full"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {STRUCTURES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                  </Section>
+                  <InvestmentProfileSection step={5} form={form} set={set} />
                 </>
               )}
 

@@ -134,6 +134,7 @@ export interface CommissionStructure {
 
 export interface Property {
   id: string;
+  slug: string;
   name: string;
   location: string;
   fullAddress: string;

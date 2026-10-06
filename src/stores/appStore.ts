@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { User, Property, Investment, Dividend, Transaction, Notification, Wallet, Referral, InstitutionalProfile } from "@/types";
-import { currentUser, wallet as initialWallet, properties, investments, dividends, transactions, notifications, referral } from "@/data/mockData";
-import { propertiesAPI } from "@/lib/api";
+import { currentUser, wallet as initialWallet, investments, dividends, transactions, notifications, referral } from "@/data/mockData";
+import { api, authAPI, authStorage, propertiesAPI } from "@/lib/api";
 
 interface AppState {
   // User
@@ -10,6 +10,8 @@ interface AppState {
 
   // Data
   properties: Property[];
+  propertiesLoading: boolean;
+  propertiesError: string | null;
   investments: Investment[];
   dividends: Dividend[];
   transactions: Transaction[];
@@ -45,7 +47,9 @@ export const useAppStore = create<AppState>((set) => ({
   user: null,
   isAuthenticated: false,
   
-  properties,
+  properties: [],
+  propertiesLoading: false,
+  propertiesError: null,
   investments,
   dividends,
   transactions,
@@ -71,7 +75,13 @@ export const useAppStore = create<AppState>((set) => ({
     return false;
   },
   
-  logout: () => set({ user: null, isAuthenticated: false }),
+  logout: () => {
+    void authAPI.logout();
+    authStorage.clear();
+    api.clearAuthToken();
+    set({ user: null, isAuthenticated: false });
+    if (typeof window !== "undefined") window.location.assign("/auth/login");
+  },
   
   toggleSidebar: () => set((state) => ({ isSidebarOpen: !state.isSidebarOpen })),
   
@@ -120,13 +130,12 @@ export const useAppStore = create<AppState>((set) => ({
   saveInstitutionalProfile: (profile) => set({ institutionalProfile: profile }),
 
   loadProperties: async () => {
-    try {
-      const res = await propertiesAPI.list();
-      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
-        set({ properties: res.data as Property[] });
-      }
-    } catch {
-      // Keep mock data as fallback when the API is unavailable.
+    set({ propertiesLoading: true, propertiesError: null });
+    const response = await propertiesAPI.list({ limit: "100" });
+    if (!response.success || !response.data) {
+      set({ properties: [], propertiesLoading: false, propertiesError: response.error || "Unable to load marketplace assets." });
+      return;
     }
+    set({ properties: response.data.data, propertiesLoading: false, propertiesError: null });
   },
 }));

@@ -92,9 +92,9 @@ export const API_ENDPOINTS = {
     search: "/api/properties/search",
   },
   investments: {
-    list: "/api/investments",
-    create: "/api/investments",
-    detail: "/api/investments/[id]",
+    list: "/investments/me",
+    create: "/investments",
+    detail: "/investments/[id]",
   },
   dividends: {
     list: "/api/dividends",

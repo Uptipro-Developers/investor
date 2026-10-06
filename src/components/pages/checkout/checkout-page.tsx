@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CheckCircle, CreditCard, Wallet, Calendar, DollarSign, ArrowRight, ArrowLeft, Shield } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,21 +9,43 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useAppStore } from "@/stores/appStore";
 import { formatCurrency, formatPercentage } from "@/lib/utils";
+import { authStorage, investmentsAPI, paymentsAPI } from "@/lib/api";
+import { useToast } from "@/hooks/use-toast";
+
+declare global {
+  interface Window {
+    PaystackPop?: { setup: (options: { key: string; email: string; amount: number; currency: string; ref: string; callback: (response: { reference: string }) => void; onClose: () => void }) => { openIframe: () => void } };
+  }
+}
 
 export default function CheckoutPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
+  const toast = useToast();
   const { properties } = useAppStore();
   const property = properties.find((p) => p.id === params.id) || properties[0];
-  const fractions = Number(params.fractions) || 1;
+  const fractions = Number(searchParams.get("fractions")) || 1;
   
   const [currentStep, setCurrentStep] = useState(1);
   const [paymentMethod, setPaymentMethod] = useState("wallet");
   const [paymentSchedule, setPaymentSchedule] = useState("full");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [paystackReady, setPaystackReady] = useState(false);
+
+  useEffect(() => {
+    if (window.PaystackPop) { setPaystackReady(true); return; }
+    const script = document.createElement("script");
+    script.src = "https://js.paystack.co/v2/inline.js";
+    script.async = true;
+    script.onload = () => setPaystackReady(true);
+    script.onerror = () => setPaystackReady(false);
+    document.body.appendChild(script);
+    return () => { script.remove(); };
+  }, []);
 
   const totalAmount = fractions * property.costPerFraction;
   const discount = paymentSchedule === "full" ? totalAmount * 0.02 : 0; // 2% discount for full payment
@@ -61,10 +83,50 @@ export default function CheckoutPage() {
   ];
 
   const handleCompletePurchase = async () => {
+    if (!property?.id) { toast.error("Payment unavailable", "The selected asset could not be found."); return; }
+    if (paymentMethod !== "card") { toast.info("Paystack checkout", "Please select Debit/Credit Card to continue with Paystack."); return; }
+    const email = useAppStore.getState().user?.email || authStorage.getUser()?.email;
+    const publicKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY;
+    if (!email || !publicKey) { toast.error("Payment unavailable", "Your investor session or Paystack configuration is missing."); return; }
+    if (!paystackReady || !window.PaystackPop) { toast.error("Payment unavailable", "Paystack is still loading. Please try again."); return; }
     setIsProcessing(true);
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    setIsProcessing(false);
-    router.push("/checkout/success");
+    try {
+      const initialized = await paymentsAPI.initialize({
+        provider: "paystack",
+        email,
+        amount: finalAmount,
+        currency: "NGN",
+        title: property.name,
+        metadata: { assetId: property.id, fractions, paymentSchedule },
+      });
+      if (!initialized.success || !initialized.data?.reference) throw new Error(initialized.error || "Could not initialize Paystack payment.");
+      const reference = initialized.data.reference;
+      window.PaystackPop.setup({
+        key: publicKey,
+        email,
+        amount: Math.round(finalAmount * 100),
+        currency: "NGN",
+        ref: reference,
+        callback: async (response) => {
+          try {
+            const verified = await paymentsAPI.verify("paystack", response.reference);
+            if (!verified.success || String(verified.data?.status).toLowerCase() !== "success") throw new Error("Paystack could not verify this payment.");
+            sessionStorage.setItem("urbco_pending_payment", JSON.stringify({ reference: response.reference, provider: "paystack", amount: finalAmount, assetId: property.id }));
+            const investment = await investmentsAPI.create({ amount: finalAmount, assetId: property.id, provider: "paystack", reference: response.reference, note: `${fractions} fraction(s) · ${paymentSchedule}` });
+            if (!investment.success) throw new Error(investment.error || "Payment was received but the investment could not be recorded.");
+            sessionStorage.removeItem("urbco_pending_payment");
+            router.push(`/checkout/success?reference=${encodeURIComponent(response.reference)}`);
+          } catch (error) {
+            toast.error("Investment could not be completed", `${error instanceof Error ? error.message : "Please contact support"} Your payment reference is saved for recovery.`);
+            setIsProcessing(false);
+          }
+        },
+        onClose: () => setIsProcessing(false),
+      }).openIframe();
+    } catch (error) {
+      setIsProcessing(false);
+      toast.error("Payment could not start", error instanceof Error ? error.message : "Please try again.");
+    }
   };
 
   const steps = [

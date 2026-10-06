@@ -1,155 +1,43 @@
 "use client";
 
-import { motion } from "framer-motion";
-import { Building2, TrendingUp, DollarSign, Calendar, PieChart as PieChartIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Building2, Calendar, CheckCircle, Clock, DollarSign, PieChart as PieChartIcon, RefreshCw, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { investments, dashboardMetrics } from "@/data/mockData";
-import { formatCurrency, formatPercentage } from "@/lib/utils";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Pie, Cell } from "recharts";
+import { investmentsAPI } from "@/lib/api";
+import { formatCurrency } from "@/lib/utils";
 import Link from "next/link";
 
-const COLORS = ["#870F73", "#D4A065", "#06b6d4", "#0ea5e9"];
+type InvestmentRecord = { id: string; totalAmount: number | string; status?: string; date?: string; paymentReference?: string | null; asset?: { id: string; name: string; location?: string | null; images?: Array<string | { url?: string | null }> } | null };
+const amountOf = (record: InvestmentRecord) => Number(record.totalAmount) || 0;
+const imageOf = (record: InvestmentRecord) => {
+  const image = record.asset?.images?.[0];
+  return typeof image === "string" ? image : image?.url || undefined;
+};
 
 export default function PortfolioPage() {
-  const totalValue = investments.reduce((sum, inv) => sum + inv.currentValuation, 0);
-  const totalInvested = investments.reduce((sum, inv) => sum + inv.amountInvested, 0);
-  const totalROI = ((totalValue - totalInvested) / totalInvested) * 100;
-
-  return (
-    <div className="space-y-8">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-display text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">My Portfolio</h1>
-          <p className="text-slate-500">Track your real estate investments</p>
-        </div>
-      </div>
-
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-600">Total Value</CardTitle>
-            <DollarSign className="h-5 w-5 text-emerald-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-slate-900">{formatCurrency(totalValue)}</div>
-            <div className="flex items-center mt-2 text-sm text-emerald-600">
-              <TrendingUp className="h-4 w-4 mr-1" />
-              <span>+{formatPercentage(totalROI)} total return</span>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-600">Amount Invested</CardTitle>
-            <PieChartIcon className="h-5 w-5 text-blue-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-slate-900">{formatCurrency(totalInvested)}</div>
-            <div className="text-sm text-slate-500 mt-2">Across {investments.length} properties</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-600">Total Returns</CardTitle>
-            <TrendingUp className="h-5 w-5 text-amber-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-emerald-600">+{formatCurrency(totalValue - totalInvested)}</div>
-            <div className="text-sm text-slate-500 mt-2">Unrealized gains</div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Portfolio Chart */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Portfolio Performance</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={dashboardMetrics.portfolioGrowth}>
-                <defs>
-                  <linearGradient id="colorPortfolio" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#870F73" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#870F73" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="month" stroke="#64748b" />
-                <YAxis stroke="#64748b" tickFormatter={(value) => `₦${value / 1000000}M`} />
-                <Tooltip formatter={(value) => [formatCurrency(Number(value)), "Value"]} />
-                <Area type="monotone" dataKey="value" stroke="#870F73" strokeWidth={3} fill="url(#colorPortfolio)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Investments List */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Your Investments</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {investments.map((investment, index) => (
-              <motion.div
-                key={investment.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.1 }}
-              >
-                <Link href={`/assets/${investment.property.id}`}>
-                  <div className="flex flex-col md:flex-row md:items-center gap-4 p-4 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer">
-                    <img
-                      src={investment.property.images[0]}
-                      alt={investment.property.name}
-                      className="w-full md:w-32 h-24 rounded-lg object-cover"
-                    />
-                    <div className="flex-1">
-                      <div className="flex items-start justify-between mb-2">
-                        <div>
-                          <h4 className="font-semibold text-slate-900 text-lg">{investment.property.name}</h4>
-                          <p className="text-sm text-slate-500">{investment.property.location}</p>
-                        </div>
-                        <Badge variant={investment.roi >= 0 ? "success" : "danger"}>
-                          {investment.roi >= 0 ? "+" : ""}{formatPercentage(investment.roi)}
-                        </Badge>
-                      </div>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div>
-                          <p className="text-xs text-slate-500">Invested</p>
-                          <p className="font-semibold text-slate-900">{formatCurrency(investment.amountInvested)}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-500">Current Value</p>
-                          <p className="font-semibold text-emerald-600">{formatCurrency(investment.currentValuation)}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-500">Fractions Owned</p>
-                          <p className="font-semibold text-slate-900">{investment.fractionsOwned}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-500">Next Dividend</p>
-                          <p className="font-semibold text-slate-900">{new Date(investment.nextDividendDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </Link>
-              </motion.div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+  const [records, setRecords] = useState<InvestmentRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const load = async () => {
+    setLoading(true); setError("");
+    const response = await investmentsAPI.list();
+    setLoading(false);
+    if (!response.success || !response.data) { setError(response.error || "Unable to load your portfolio."); return; }
+    setRecords(Array.isArray(response.data) ? response.data : []);
+  };
+  useEffect(() => { void load(); }, []);
+  const totalInvested = useMemo(() => records.reduce((sum, record) => sum + amountOf(record), 0), [records]);
+  if (loading) return <Card><CardContent className="flex items-center justify-center gap-3 p-12 text-slate-600"><Clock className="h-5 w-5 animate-pulse" /> Loading your portfolio…</CardContent></Card>;
+  if (error) return <Card className="border-red-200"><CardContent className="p-10 text-center"><p className="font-semibold text-red-700">{error}</p><Button className="mt-4" onClick={() => void load()}><RefreshCw className="mr-2 h-4 w-4" />Try again</Button></CardContent></Card>;
+  return <div className="space-y-8">
+    <div><h1 className="font-display text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">My Portfolio</h1><p className="text-slate-500">Track your confirmed investment transactions</p></div>
+    <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+      <Card><CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="text-sm font-medium text-slate-600">Total Invested</CardTitle><DollarSign className="h-5 w-5 text-emerald-600" /></CardHeader><CardContent><div className="text-3xl font-bold text-slate-900">{formatCurrency(totalInvested)}</div><div className="mt-2 text-sm text-slate-500">Across {records.length} investment{records.length === 1 ? "" : "s"}</div></CardContent></Card>
+      <Card><CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="text-sm font-medium text-slate-600">Confirmed Investments</CardTitle><PieChartIcon className="h-5 w-5 text-blue-600" /></CardHeader><CardContent><div className="text-3xl font-bold text-slate-900">{records.filter((record) => record.status === "COMPLETED").length}</div><div className="mt-2 text-sm text-slate-500">Payment-verified transactions</div></CardContent></Card>
+      <Card><CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="text-sm font-medium text-slate-600">Returns</CardTitle><TrendingUp className="h-5 w-5 text-amber-600" /></CardHeader><CardContent><div className="text-xl font-bold text-slate-700">Pending valuation</div><div className="mt-2 text-sm text-slate-500">Performance data will appear when available</div></CardContent></Card>
     </div>
-  );
+    <Card><CardHeader><CardTitle>Investment transactions</CardTitle></CardHeader><CardContent>{records.length === 0 ? <div className="py-12 text-center text-slate-500"><Building2 className="mx-auto mb-3 h-8 w-8" /><p>You have no confirmed investments yet.</p><Link href="/marketplace" className="mt-4 inline-block text-sm font-semibold text-emerald-700">Explore the marketplace</Link></div> : <div className="space-y-4">{records.map((record) => <Link key={record.id} href={record.asset?.id ? `/assets/${record.asset.id}` : "/marketplace"} className="block"><div className="flex flex-col gap-4 rounded-xl bg-slate-50 p-4 transition-colors hover:bg-slate-100 md:flex-row md:items-center"><div className="flex h-16 w-20 items-center justify-center overflow-hidden rounded-lg bg-slate-200">{imageOf(record) ? <img src={imageOf(record)} alt={record.asset?.name || "Investment asset"} className="h-full w-full object-cover" /> : <Building2 className="h-7 w-7 text-slate-400" />}</div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h4 className="font-semibold text-slate-900">{record.asset?.name || "Investment"}</h4><Badge variant={record.status === "COMPLETED" ? "success" : "secondary"}>{record.status === "COMPLETED" ? <><CheckCircle className="mr-1 h-3 w-3" />Completed</> : record.status || "Pending"}</Badge></div><p className="text-sm text-slate-500">{record.asset?.location || "Urbco asset"}</p><p className="mt-1 flex items-center gap-1 text-xs text-slate-500"><Calendar className="h-3 w-3" />{record.date ? new Date(record.date).toLocaleDateString() : "—"}</p></div><div className="text-left md:text-right"><p className="text-xs text-slate-500">Amount invested</p><p className="font-semibold text-slate-900">{formatCurrency(amountOf(record))}</p>{record.paymentReference && <p className="mt-1 max-w-40 truncate font-mono text-[10px] text-slate-400">{record.paymentReference}</p>}</div></div></Link>)}</div>}</CardContent></Card>
+  </div>;
 }

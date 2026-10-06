@@ -158,7 +158,7 @@ function deriveAdmin(p: AdminSeed) {
   };
 }
 
-const rawProperties: Omit<Property, "referenceCode" | "developerCompany" | "projectStatus" | "landSizeSqm" | "builtSizeSqm" | "constructionStartDate" | "constructionEndDate" | "totalUnits" | "availableUnits" | "unitConfiguration" | "facilityManagement" | "investmentProgram" | "buyingPaths" | "pricing" | "returns" | "risk" | "documents" | "virtualTours" | "commission" | "publishStatus">[] = [
+const rawProperties: Omit<Property, "slug" | "referenceCode" | "developerCompany" | "projectStatus" | "landSizeSqm" | "builtSizeSqm" | "constructionStartDate" | "constructionEndDate" | "totalUnits" | "availableUnits" | "unitConfiguration" | "facilityManagement" | "investmentProgram" | "buyingPaths" | "pricing" | "returns" | "risk" | "documents" | "virtualTours" | "commission" | "publishStatus">[] = [
   {
     id: "prop-000-foundry-1",
     name: "Eko Atlantic Waterfront Towers",
@@ -484,7 +484,11 @@ const rawProperties: Omit<Property, "referenceCode" | "developerCompany" | "proj
   },
 ];
 
-export const properties: Property[] = rawProperties.map((p) => ({ ...p, ...deriveAdmin(p) }));
+export const properties: Property[] = rawProperties.map((p) => ({
+  ...p,
+  slug: p.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
+  ...deriveAdmin(p),
+}));
 
 export const investments: Investment[] = [
   {

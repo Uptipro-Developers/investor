@@ -1,6 +1,7 @@
 // API Helper Utilities for Backend Integration
 
 import { APP_CONFIG, API_ENDPOINTS } from "./config";
+import type { Property } from "@/types";
 
 export interface ApiResponse<T> {
   success: boolean;
@@ -12,6 +13,7 @@ export interface ApiResponse<T> {
 export interface ApiRequestConfig extends RequestInit {
   timeout?: number;
   retry?: number;
+  skipAuthRefresh?: boolean;
 }
 
 // Base API client
@@ -19,6 +21,7 @@ export class ApiClient {
   private baseURL: string;
   private defaultHeaders: Record<string, string>;
   private timeout: number;
+  private refreshPromise: Promise<string | null> | null = null;
 
   constructor(baseURL: string = "", timeout: number = 30000) {
     this.baseURL = baseURL;
@@ -52,34 +55,91 @@ export class ApiClient {
     });
   }
 
+  private storedToken(): string | null {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem("auth_token");
+  }
+
+  private async refreshAuthToken(): Promise<string | null> {
+    if (typeof window === "undefined") return null;
+    if (this.refreshPromise) return this.refreshPromise;
+
+    this.refreshPromise = (async () => {
+      try {
+        const response = await fetch(this.buildURL("/auth/refresh"), {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: "{}",
+        });
+        if (!response.ok) throw new Error("Refresh failed");
+        const data = await response.json();
+        if (!data?.access_token) throw new Error("Refresh response did not include an access token");
+        window.localStorage.setItem("auth_token", data.access_token);
+        this.setAuthToken(data.access_token);
+        return data.access_token as string;
+      } catch {
+        window.localStorage.removeItem("auth_token");
+        this.clearAuthToken();
+        return null;
+      } finally {
+        this.refreshPromise = null;
+      }
+    })();
+
+    return this.refreshPromise;
+  }
+
   // Generic request method
   async request<T>(
     endpoint: string,
     config: ApiRequestConfig = {}
   ): Promise<ApiResponse<T>> {
-    const { timeout = this.timeout, retry = 1, headers = {}, ...restConfig } = config;
+    const { timeout = this.timeout, retry = 1, headers = {}, skipAuthRefresh = false, ...restConfig } = config;
 
     const url = this.buildURL(endpoint);
+    const requestHeaders = new Headers(this.defaultHeaders);
+    const storedToken = this.storedToken();
+    if (storedToken) {
+      requestHeaders.set("Authorization", `Bearer ${storedToken}`);
+      this.setAuthToken(storedToken);
+    }
+    new Headers(headers).forEach((value, key) => requestHeaders.set(key, value));
+    if (typeof FormData !== "undefined" && restConfig.body instanceof FormData) {
+      requestHeaders.delete("Content-Type");
+    }
     const requestConfig: RequestInit = {
       ...restConfig,
-      headers: {
-        ...this.defaultHeaders,
-        ...headers,
-      },
+      credentials: restConfig.credentials ?? "include",
+      headers: requestHeaders,
     };
 
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < retry; attempt++) {
       try {
-        const response = await Promise.race([
+        let response = await Promise.race([
           fetch(url, requestConfig),
           this.createTimeout(timeout),
         ]);
 
+        if (response.status === 401 && !skipAuthRefresh && endpoint !== "/auth/refresh") {
+          const refreshedToken = await this.refreshAuthToken();
+          if (refreshedToken) {
+            requestHeaders.set("Authorization", `Bearer ${refreshedToken}`);
+            response = await Promise.race([
+              fetch(url, { ...requestConfig, headers: requestHeaders }),
+              this.createTimeout(timeout),
+            ]);
+          }
+        }
+
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
+          const message = response.status === 401
+            ? "Your session has expired. Please sign in again."
+            : errorData.message || `HTTP ${response.status}: ${response.statusText}`;
+          throw new Error(message);
         }
 
         const data = await response.json();
@@ -118,6 +178,13 @@ export class ApiClient {
     });
   }
 
+  async postForm<T>(endpoint: string, data: FormData): Promise<ApiResponse<T>> {
+    return this.request<T>(endpoint, {
+      method: "POST",
+      body: data,
+    });
+  }
+
   async put<T>(
     endpoint: string,
     data?: any,
@@ -145,43 +212,261 @@ export class ApiClient {
   async delete<T>(endpoint: string, config?: ApiRequestConfig): Promise<ApiResponse<T>> {
     return this.request<T>(endpoint, { ...config, method: "DELETE" });
   }
+
+  async download(endpoint: string): Promise<ApiResponse<Blob>> {
+    try {
+      const response = await fetch(this.buildURL(endpoint), {
+        method: "GET",
+        credentials: "include",
+        headers: { ...this.defaultHeaders },
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        return { success: false, error: errorData.message || `Download failed (${response.status})` };
+      }
+      return { success: true, data: await response.blob() };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : "Download failed" };
+    }
+  }
 }
 
 // Create API instances
-export const api = new ApiClient(process.env.NEXT_PUBLIC_API_URL || "");
+const defaultApiUrl = process.env.NODE_ENV === "development" ? "http://localhost:1000" : "";
+export const api = new ApiClient(process.env.NEXT_PUBLIC_API_URL || defaultApiUrl);
 
 // Auth API
 export const authAPI = {
-  login: (email: string, password: string) =>
-    api.post<{ token: string; user: any }>(API_ENDPOINTS.auth.login, { email, password }),
+  loginInvestor: (email: string, password: string, rememberMe: boolean) =>
+    api.post<InvestorLoginResponse>("/auth/investor/login", { email, password, rememberMe }),
 
   signup: (data: any) =>
     api.post<{ token: string; user: any }>(API_ENDPOINTS.auth.signup, data),
 
-  logout: () => api.post(API_ENDPOINTS.auth.logout),
+  logout: () => api.post("/auth/logout"),
 
   verifyOTP: (email: string, otp: string) =>
     api.post(API_ENDPOINTS.auth.verifyOTP, { email, otp }),
 
   forgotPassword: (email: string) =>
-    api.post(API_ENDPOINTS.auth.forgotPassword, { email }),
+    api.post<{ message: string }>("/auth/investor/forgot-password", { email }),
 
   resetPassword: (token: string, password: string) =>
-    api.post(API_ENDPOINTS.auth.resetPassword, { token, password }),
+    api.post<{ message: string }>("/auth/investor/reset-password", { token, password }),
+
+  registerInvestor: (data: InvestorRegistrationRequest) =>
+    api.post<InvestorRegistrationResponse>("/auth/investor/register", data),
+
+  verifyInvestorEmail: (email: string, code: string) =>
+    api.post<InvestorVerificationResponse>("/auth/investor/verify-email", { email, code }),
+
+  resendInvestorVerification: (email: string) =>
+    api.post<{ message: string }>("/auth/investor/resend-verification", { email }),
+
+  investorProfile: () =>
+    api.get<InvestorProfileResponse>("/auth/investor/me"),
+};
+
+export interface InvestorAuthContext {
+  track: "FOUNDRY" | "HARBOR";
+  entityType: "INDIVIDUAL" | "FAMILY_OFFICE" | "INSTITUTION";
+  onboardingStatus: "EMAIL_PENDING" | "PROFILE_PENDING" | "KYC_PENDING" | "UNDER_REVIEW" | "REMEDIATION_REQUIRED" | "VERIFIED" | "REJECTED";
+}
+
+export interface InvestorRegistrationRequest {
+  track: "FOUNDRY" | "HARBOR";
+  entityType: "INDIVIDUAL" | "FAMILY_OFFICE" | "INSTITUTION";
+  account: {
+    fullName: string;
+    email: string;
+    phone: string;
+    password: string;
+    countryCode: string;
+  };
+  individual?: {
+    dateOfBirth: string;
+    nationality?: string;
+    primaryIdType: string;
+    sourceOfFunds: string;
+    employmentStatus: string;
+  };
+  entity?: {
+    legalName: string;
+    registrationNumber?: string;
+    countryCode: string;
+    institutionType?: string;
+    taxId?: string;
+    regulatorName?: string;
+    representativeDateOfBirth?: string;
+    aumMin?: number;
+    aumMax?: number;
+    aumCurrency?: string;
+  };
+  investmentPreference?: {
+    currency: string;
+    minimumTicket: number;
+    maximumTicket?: number;
+    preferredAsset?: string;
+    horizonMinMonths?: number;
+    horizonMaxMonths?: number;
+    preferredStructure?: string;
+  };
+  consent: {
+    termsVersion: string;
+    privacyVersion: string;
+  };
+}
+
+export interface InvestorRegistrationResponse {
+  registrationId: string;
+  email: string;
+  verificationRequired: true;
+  nextStep: "VERIFY_EMAIL";
+}
+
+export interface InvestorVerificationResponse {
+  access_token: string;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    phone?: string | null;
+    role: string;
+  };
+  investor: InvestorAuthContext;
+  nextStep: "DASHBOARD" | "ENTITY_ONBOARDING";
+}
+
+export type InvestorLoginResponse =
+  | {
+      verificationRequired: true;
+      email: string;
+      nextStep: "VERIFY_EMAIL";
+    }
+  | {
+      access_token: string;
+      user: {
+        id: string;
+        email: string;
+        name: string;
+        phone?: string | null;
+        role: string;
+      };
+      investor: InvestorAuthContext;
+      nextStep: "DASHBOARD" | "ENTITY_ONBOARDING";
+    };
+
+export interface InvestorProfileResponse {
+  id: string;
+  email: string;
+  name: string;
+  phone?: string | null;
+  investor: InvestorAuthContext;
+}
+
+export interface InvestorAssetListResponse {
+  data: Property[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+  track: "FOUNDRY" | "HARBOR";
+}
+
+export type KycFieldRequirement = {
+  code: string;
+  label: string;
+  type?: "text" | "email" | "textarea";
+};
+
+export type KycDocumentRequirement = {
+  code: string;
+  label: string;
+  description: string;
+  required: boolean;
+};
+
+export type InvestorKycResponse = {
+  id: string;
+  investor: InvestorProfileResponse["investor"] & {
+    id: string;
+    userId: string;
+    name: string;
+    email: string;
+    phone?: string | null;
+  };
+  profile: Record<string, string | string[]>;
+  declarations: Record<string, string | string[]>;
+  requirements: {
+    profileFields: KycFieldRequirement[];
+    declarationFields: KycFieldRequirement[];
+    documents: KycDocumentRequirement[];
+  };
+  documents: Array<{
+    id: string;
+    requirementCode: string;
+    label: string;
+    required: boolean;
+    originalName: string;
+    mimeType: string;
+    size: number;
+    status: "PENDING" | "APPROVED" | "REJECTED";
+    rejectionReason?: string | null;
+    uploadedAt: string;
+    downloadUrl: string;
+  }>;
+  remediationItems: Array<{
+    id: string;
+    requirementCode: string;
+    category: "PROFILE" | "DOCUMENT" | "DECLARATION";
+    label: string;
+    reason: string;
+  }>;
+  submittedAt?: string | null;
+  reviewedAt?: string | null;
+  submissionRevision: number;
+  completion: {
+    percent: number;
+    profile: { done: number; total: number };
+    declarations: { done: number; total: number };
+    documents: { done: number; total: number };
+  };
+};
+
+export const investorKycAPI = {
+  get: () => api.get<InvestorKycResponse>("/investor/kyc"),
+  save: (profile: Record<string, unknown>, declarations: Record<string, unknown>) =>
+    api.put<InvestorKycResponse>("/investor/kyc", { profile, declarations }),
+  uploadDocument: (requirementCode: string, file: File) => {
+    const data = new FormData();
+    data.append("requirementCode", requirementCode);
+    data.append("file", file);
+    return api.postForm<InvestorKycResponse["documents"][number]>("/investor/kyc/documents", data);
+  },
+  deleteDocument: (documentId: string) =>
+    api.delete<{ success: boolean }>(`/investor/kyc/documents/${encodeURIComponent(documentId)}`),
+  submit: () => api.post<InvestorKycResponse>("/investor/kyc/submit"),
+  downloadDocument: (documentId: string) =>
+    api.download(`/investor/kyc/documents/${encodeURIComponent(documentId)}`),
 };
 
 // Properties API
 export const propertiesAPI = {
-  list: (params?: Record<string, any>) => {
+  list: (params?: Record<string, string>) => {
     const queryString = params ? `?${new URLSearchParams(params).toString()}` : "";
-    return api.get<any[]>(`${API_ENDPOINTS.properties.list}${queryString}`);
+    return api.get<InvestorAssetListResponse>(`/investor/assets${queryString}`);
   },
 
-  detail: (id: string) =>
-    api.get<any>(API_ENDPOINTS.properties.detail.replace("[id]", id)),
+  detail: (slug: string) =>
+    api.get<Property>(`/investor/assets/${encodeURIComponent(slug)}`),
+
+  downloadDocument: (slug: string, documentId: string) =>
+    api.download(`/investor/assets/${encodeURIComponent(slug)}/documents/${encodeURIComponent(documentId)}/download`),
 
   search: (query: string) =>
-    api.get<any[]>(`${API_ENDPOINTS.properties.search}?q=${encodeURIComponent(query)}`),
+    api.get<InvestorAssetListResponse>(`/investor/assets?search=${encodeURIComponent(query)}`),
 };
 
 // Investments API
@@ -193,6 +478,19 @@ export const investmentsAPI = {
 
   detail: (id: string) =>
     api.get<any>(API_ENDPOINTS.investments.detail.replace("[id]", id)),
+};
+
+export const paymentsAPI = {
+  initialize: (data: {
+    provider: "paystack" | "flutterwave";
+    email: string;
+    amount: number;
+    currency?: string;
+    metadata?: Record<string, unknown>;
+    title?: string;
+  }) => api.post<{ provider: string; reference: string; authorizationUrl?: string }>('/payments/initialize', data),
+  verify: (provider: "paystack" | "flutterwave", reference: string) =>
+    api.get<{ provider: string; reference: string; status: string; amount?: number; currency?: string; customerEmail?: string }>(`/payments/verify?provider=${provider}&reference=${encodeURIComponent(reference)}`),
 };
 
 // Dividends API
@@ -227,10 +525,7 @@ export const userAPI = {
 
   kyc: () => api.get<any>(API_ENDPOINTS.user.kyc),
 
-  submitKYC: (data: FormData) =>
-    api.post<any>(API_ENDPOINTS.user.kyc, data, {
-      headers: { "Content-Type": "multipart/form-data" },
-    }),
+  submitKYC: (data: FormData) => api.postForm<any>(API_ENDPOINTS.user.kyc, data),
 
   referrals: () => api.get<any>(API_ENDPOINTS.user.referrals),
 };

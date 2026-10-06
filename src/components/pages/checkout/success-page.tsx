@@ -1,12 +1,17 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
 import { CheckCircle, Home, ArrowRight, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import Link from "next/link";
 
 export default function CheckoutSuccessPage() {
+  const [reference, setReference] = useState<string | null>(null);
+  useEffect(() => {
+    setReference(new URLSearchParams(window.location.search).get("reference"));
+  }, []);
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center px-6 py-12">
       <motion.div
@@ -34,7 +39,7 @@ export default function CheckoutSuccessPage() {
             <div className="space-y-4 mb-8">
               <div className="p-4 bg-slate-50 rounded-xl">
                 <p className="text-sm text-slate-500 mb-1">Transaction Reference</p>
-                <p className="font-mono font-semibold text-slate-900">INV-2024-{Math.random().toString(36).substr(2, 9).toUpperCase()}</p>
+                <p className="font-mono font-semibold text-slate-900">{reference || "Verified payment"}</p>
               </div>
               <p className="text-sm text-slate-600">
                 A confirmation email has been sent to your registered email address.
