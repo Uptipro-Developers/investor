@@ -24,7 +24,7 @@ export class ApiClient {
   private refreshPromise: Promise<string | null> | null = null;
 
   constructor(baseURL: string = "", timeout: number = 30000) {
-    this.baseURL = baseURL;
+    this.baseURL = baseURL.replace(/\/+$/, "");
     this.timeout = timeout;
     this.defaultHeaders = {
       "Content-Type": "application/json",
@@ -44,8 +44,9 @@ export class ApiClient {
 
   // Build URL
   private buildURL(endpoint: string): string {
-    const url = endpoint.startsWith("http") ? endpoint : `${this.baseURL}${endpoint}`;
-    return url;
+    if (endpoint.startsWith("http")) return endpoint;
+    const path = endpoint.replace(/^\/+/, "");
+    return this.baseURL ? `${this.baseURL}/${path}` : `/${path}`;
   }
 
   // Create timeout promise
@@ -231,12 +232,9 @@ export class ApiClient {
   }
 }
 
-// Create API instances
-// const defaultApiUrl = process.env.NODE_ENV === "development" ? "http://localhost:1000" : "";
-const currentUrl = window.location.href;
-const defaultApiUrl = currentUrl.includes('admin-git-development-uptipros-projects') ? 'https://buyops-backend-development.up.railway.app/' : currentUrl.includes('localhost') ? 'http://localhost:1000/' : process.env.NEXT_PRIVATE_API_URL
-
-export const api = new ApiClient(defaultApiUrl);
+// Create API instance. ApiClient normalizes trailing/leading slashes.
+const defaultApiUrl = process.env.NODE_ENV === "development" ? "http://localhost:1000" : "";
+export const api = new ApiClient(process.env.NEXT_PUBLIC_API_URL || defaultApiUrl);
 
 // Auth API
 export const authAPI = {
