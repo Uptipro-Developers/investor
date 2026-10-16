@@ -107,7 +107,7 @@ export const API_ENDPOINTS = {
     transactions: "/api/wallet/transactions",
   },
   user: {
-    profile: "/api/user/profile",
+    profile: "/users/me",
     kyc: "/api/user/kyc",
     referrals: "/api/user/referrals",
   },

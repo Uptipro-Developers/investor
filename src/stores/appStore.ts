@@ -1,12 +1,13 @@
 import { create } from "zustand";
 import { User, Property, Investment, Dividend, Transaction, Notification, Wallet, Referral, InstitutionalProfile } from "@/types";
-import { currentUser, wallet as initialWallet, investments, dividends, transactions, notifications, referral } from "@/data/mockData";
+import { wallet as initialWallet, investments, dividends, transactions, notifications, referral } from "@/data/mockData";
 import { api, authAPI, authStorage, propertiesAPI } from "@/lib/api";
 
 interface AppState {
   // User
   user: User | null;
   isAuthenticated: boolean;
+  authInitialized: boolean;
 
   // Data
   properties: Property[];
@@ -28,7 +29,7 @@ interface AppState {
 
   // Actions
   setUser: (user: User | null) => void;
-  login: (email: string, password: string) => Promise<boolean>;
+  setAuthInitialized: (initialized: boolean) => void;
   logout: () => void;
   toggleSidebar: () => void;
   toggleTheme: () => void;
@@ -46,6 +47,7 @@ export const useAppStore = create<AppState>((set) => ({
   // Initial State
   user: null,
   isAuthenticated: false,
+  authInitialized: false,
   
   properties: [],
   propertiesLoading: false,
@@ -64,16 +66,7 @@ export const useAppStore = create<AppState>((set) => ({
   
   // Actions
   setUser: (user) => set({ user, isAuthenticated: !!user }),
-  
-  login: async (email: string, password: string) => {
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    if (email && password) {
-      set({ user: currentUser, isAuthenticated: true });
-      return true;
-    }
-    return false;
-  },
+  setAuthInitialized: (authInitialized) => set({ authInitialized }),
   
   logout: () => {
     void authAPI.logout();

@@ -1,18 +1,95 @@
 "use client";
 
-import { useState } from "react";
-import { User, Mail, Phone, MapPin, Calendar, Edit2, Upload, CheckCircle, AlertCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { User, Mail, Phone, MapPin, Calendar, Edit2, Upload, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAppStore } from "@/stores/appStore";
-import { currentUser } from "@/data/mockData";
+import { authAPI, authStorage } from "@/lib/api";
+import { investorProfileToUser } from "@/lib/investor-user";
+import { useToast } from "@/hooks/use-toast";
+
+const COUNTRIES = [
+  { code: "NG", name: "Nigeria" },
+  { code: "GH", name: "Ghana" },
+  { code: "KE", name: "Kenya" },
+  { code: "ZA", name: "South Africa" },
+  { code: "UK", name: "United Kingdom" },
+  { code: "US", name: "United States" },
+  { code: "AE", name: "United Arab Emirates" },
+];
+
+const NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} .'-]*$/u;
 
 export default function ProfilePage() {
-  const { user } = useAppStore();
+  const { user, authInitialized, setUser } = useAppStore();
+  const toast = useToast();
   const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [form, setForm] = useState({ fullName: "", phone: "", countryCode: "NG" });
+
+  useEffect(() => {
+    if (!user) return;
+    setForm({
+      fullName: user.fullName,
+      phone: user.phone,
+      countryCode: user.countryCode || "NG",
+    });
+  }, [user]);
+
+  const cancelEditing = () => {
+    if (user) {
+      setForm({
+        fullName: user.fullName,
+        phone: user.phone,
+        countryCode: user.countryCode || "NG",
+      });
+    }
+    setIsEditing(false);
+  };
+
+  const saveProfile = async () => {
+    const fullName = form.fullName.trim();
+    const phone = form.phone.replace(/[\s()-]/g, "");
+    if (!NAME_PATTERN.test(fullName)) {
+      toast.error("Enter a valid full name", "Use letters, spaces, apostrophes, hyphens, and periods only.");
+      return;
+    }
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+      toast.error("Enter a valid phone number", "Use an international number such as +2348012345678.");
+      return;
+    }
+
+    setIsSaving(true);
+    const response = await authAPI.updateInvestorProfile({
+      fullName,
+      phone,
+      countryCode: form.countryCode,
+    });
+    setIsSaving(false);
+    if (!response.success || !response.data) {
+      toast.error("Unable to save profile", response.error || "Please try again.");
+      return;
+    }
+
+    const updatedUser = investorProfileToUser(response.data, user);
+    authStorage.setUser(updatedUser);
+    setUser(updatedUser);
+    setIsEditing(false);
+    toast.success("Profile updated", "Your changes have been saved.");
+  };
+
+  if (!authInitialized) {
+    return <div className="flex min-h-64 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-brand-600" /></div>;
+  }
+
+  if (!user) {
+    return <div className="rounded-xl border border-line bg-white p-6 text-sm text-slate-600">Unable to load your profile. Please sign in again.</div>;
+  }
 
   return (
     <div className="space-y-8">
@@ -28,17 +105,16 @@ export default function ProfilePage() {
           <CardContent className="pt-6">
             <div className="text-center">
               <div className="relative inline-block">
-                <img
-                  src={user?.avatar || currentUser.avatar}
-                  alt={user?.fullName || currentUser.fullName}
-                  className="w-32 h-32 rounded-full object-cover mx-auto mb-4 border-4 border-emerald-100"
-                />
-                <button className="absolute bottom-0 right-0 w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center hover:bg-emerald-700">
-                  <Edit2 className="h-4 w-4" />
-                </button>
+                {user.avatar ? (
+                  <img src={user.avatar} alt={user.fullName} className="w-32 h-32 rounded-full object-cover mx-auto mb-4 border-4 border-emerald-100" />
+                ) : (
+                  <div className="mx-auto mb-4 flex h-32 w-32 items-center justify-center rounded-full border-4 border-emerald-100 bg-emerald-50 text-4xl font-bold text-emerald-700">
+                    {user.fullName.charAt(0).toUpperCase()}
+                  </div>
+                )}
               </div>
-              <h2 className="text-2xl font-bold text-slate-900">{user?.fullName || currentUser.fullName}</h2>
-              <p className="text-slate-500 mb-4">{user?.email || currentUser.email}</p>
+              <h2 className="text-2xl font-bold text-slate-900">{user.fullName}</h2>
+              <p className="text-slate-500 mb-4">{user.email}</p>
               
               <Badge variant={user?.kycStatus === "verified" ? "success" : "warning"} className="mb-6">
                 {user?.kycStatus === "verified" ? (
@@ -51,19 +127,19 @@ export default function ProfilePage() {
               <div className="space-y-3 text-left">
                 <div className="flex items-center space-x-3 text-sm">
                   <Mail className="h-4 w-4 text-slate-400" />
-                  <span className="text-slate-600">{user?.email || currentUser.email}</span>
+                  <span className="text-slate-600">{user.email}</span>
                 </div>
                 <div className="flex items-center space-x-3 text-sm">
                   <Phone className="h-4 w-4 text-slate-400" />
-                  <span className="text-slate-600">{user?.phone || currentUser.phone}</span>
+                  <span className="text-slate-600">{user.phone || "Not provided"}</span>
                 </div>
                 <div className="flex items-center space-x-3 text-sm">
                   <MapPin className="h-4 w-4 text-slate-400" />
-                  <span className="text-slate-600">{user?.country || currentUser.country}</span>
+                  <span className="text-slate-600">{user.country || "Not provided"}</span>
                 </div>
                 <div className="flex items-center space-x-3 text-sm">
                   <Calendar className="h-4 w-4 text-slate-400" />
-                  <span className="text-slate-600">Joined {new Date(user?.createdAt || currentUser.createdAt).toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
+                  <span className="text-slate-600">Joined {new Date(user.createdAt).toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
                 </div>
               </div>
             </div>
@@ -74,7 +150,7 @@ export default function ProfilePage() {
         <Card className="md:col-span-2">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>Personal Information</CardTitle>
-            <Button variant="outline" size="sm" onClick={() => setIsEditing(!isEditing)}>
+            <Button variant="outline" size="sm" onClick={() => isEditing ? cancelEditing() : setIsEditing(true)}>
               <Edit2 className="h-4 w-4 mr-2" /> {isEditing ? "Cancel" : "Edit"}
             </Button>
           </CardHeader>
@@ -83,36 +159,41 @@ export default function ProfilePage() {
               <div>
                 <Label>Full Name</Label>
                 <Input
-                  defaultValue={user?.fullName || currentUser.fullName}
+                  value={form.fullName}
+                  onChange={(event) => setForm((current) => ({ ...current, fullName: event.target.value }))}
                   disabled={!isEditing}
                 />
               </div>
               <div>
                 <Label>Email Address</Label>
                 <Input
-                  defaultValue={user?.email || currentUser.email}
+                  value={user.email}
                   disabled
                 />
               </div>
               <div>
                 <Label>Phone Number</Label>
                 <Input
-                  defaultValue={user?.phone || currentUser.phone}
+                  value={form.phone}
+                  onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value.replace(/[^\d+()\s-]/g, "") }))}
                   disabled={!isEditing}
                 />
               </div>
               <div>
                 <Label>Country</Label>
-                <Input
-                  defaultValue={user?.country || currentUser.country}
-                  disabled={!isEditing}
-                />
+                <Select value={form.countryCode} onValueChange={(countryCode) => setForm((current) => ({ ...current, countryCode }))} disabled={!isEditing}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {COUNTRIES.map((country) => <SelectItem key={country.code} value={country.code}>{country.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
             {isEditing && (
-              <Button variant="premium" className="mt-4">
-                Save Changes
+              <Button variant="premium" className="mt-4" onClick={() => void saveProfile()} disabled={isSaving}>
+                {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {isSaving ? "Saving..." : "Save Changes"}
               </Button>
             )}
           </CardContent>
@@ -129,7 +210,7 @@ export default function ProfilePage() {
             <div>
               <Label className="text-slate-500">Investment Experience</Label>
               <div className="mt-2 p-4 bg-slate-50 rounded-xl">
-                <p className="font-semibold text-slate-900 capitalize">{user?.investmentExperience || currentUser.investmentExperience}</p>
+                <p className="font-semibold text-slate-900 capitalize">{user.investmentExperience}</p>
                 <p className="text-sm text-slate-500">
                   {user?.investmentExperience === "beginner" ? "0-2 years of experience" :
                    user?.investmentExperience === "intermediate" ? "2-5 years of experience" :
@@ -140,7 +221,7 @@ export default function ProfilePage() {
             <div>
               <Label className="text-slate-500">Risk Appetite</Label>
               <div className="mt-2 p-4 bg-slate-50 rounded-xl">
-                <p className="font-semibold text-slate-900 capitalize">{user?.riskAppetite || currentUser.riskAppetite}</p>
+                <p className="font-semibold text-slate-900 capitalize">{user.riskAppetite}</p>
                 <p className="text-sm text-slate-500">
                   {user?.riskAppetite === "low" ? "Capital preservation focused" :
                    user?.riskAppetite === "medium" ? "Balanced growth approach" :

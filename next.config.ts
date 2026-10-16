@@ -1,7 +1,20 @@
 import type { NextConfig } from "next";
 
+const backendUrl = (
+  process.env.BACKEND_URL
+  || (process.env.NODE_ENV === "development" ? "http://localhost:1000" : process.env.NEXT_PUBLIC_API_URL)
+  || "http://localhost:1000"
+).replace(/\/+$/, "");
+
 const nextConfig: NextConfig = {
-  /* config options here */
+  async rewrites() {
+    return [
+      {
+        source: "/backend/:path*",
+        destination: `${backendUrl}/:path*`,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

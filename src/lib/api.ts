@@ -81,6 +81,7 @@ export class ApiClient {
         return data.access_token as string;
       } catch {
         window.localStorage.removeItem("auth_token");
+        window.localStorage.removeItem("user");
         this.clearAuthToken();
         return null;
       } finally {
@@ -124,6 +125,7 @@ export class ApiClient {
           this.createTimeout(timeout),
         ]);
 
+        let refreshFailed = false;
         if (response.status === 401 && !skipAuthRefresh && endpoint !== "auth/refresh") {
           const refreshedToken = await this.refreshAuthToken();
           if (refreshedToken) {
@@ -132,12 +134,14 @@ export class ApiClient {
               fetch(url, { ...requestConfig, headers: requestHeaders }),
               this.createTimeout(timeout),
             ]);
+          } else {
+            refreshFailed = true;
           }
         }
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-          const message = response.status === 401
+          const message = response.status === 401 && refreshFailed
             ? "Your session has expired. Please sign in again."
             : errorData.message || `HTTP ${response.status}: ${response.statusText}`;
           throw new Error(message);
@@ -232,21 +236,14 @@ export class ApiClient {
   }
 }
 
-// Create API instance. ApiClient normalize trailing/leading slashes.
-
-let currentUrl, defaultApiUrl;
-if (typeof window !== "undefined") {
-  currentUrl = window.location.href;
-  defaultApiUrl = currentUrl.includes('investor-git-development-uptipros-projects.vercel.app') ? 'https://buyops-backend-development.up.railway.app' : currentUrl.includes('localhost') ? 'http://localhost:1000' : process.env.NEXT_PUBLIC_API_URL
-
-}
-// const defaultApiUrl = process.env.NODE_ENV === "development" ? "http://localhost:1000" : "";
-export const api = new ApiClient(defaultApiUrl);
+// Keep API calls same-origin. Next.js proxies /backend to the configured backend,
+// allowing the HttpOnly refresh cookie to work without third-party cookie access.
+export const api = new ApiClient("/backend");
 
 // Auth API
 export const authAPI = {
   loginInvestor: (email: string, password: string, rememberMe: boolean) =>
-    api.post<InvestorLoginResponse>("auth/investor/login", { email, password, rememberMe }),
+    api.post<InvestorLoginResponse>("auth/investor/login", { email, password, rememberMe }, { skipAuthRefresh: true }),
 
   signup: (data: any) =>
     api.post<{ token: string; user: any }>(API_ENDPOINTS.auth.signup, data),
@@ -257,22 +254,25 @@ export const authAPI = {
     api.post(API_ENDPOINTS.auth.verifyOTP, { email, otp }),
 
   forgotPassword: (email: string) =>
-    api.post<{ message: string }>("auth/investor/forgot-password", { email }),
+    api.post<{ message: string }>("auth/investor/forgot-password", { email }, { skipAuthRefresh: true }),
 
   resetPassword: (token: string, password: string) =>
-    api.post<{ message: string }>("auth/investor/reset-password", { token, password }),
+    api.post<{ message: string }>("auth/investor/reset-password", { token, password }, { skipAuthRefresh: true }),
 
   registerInvestor: (data: InvestorRegistrationRequest) =>
-    api.post<InvestorRegistrationResponse>("auth/investor/register", data),
+    api.post<InvestorRegistrationResponse>("auth/investor/register", data, { skipAuthRefresh: true }),
 
   verifyInvestorEmail: (email: string, code: string) =>
-    api.post<InvestorVerificationResponse>("auth/investor/verify-email", { email, code }),
+    api.post<InvestorVerificationResponse>("auth/investor/verify-email", { email, code }, { skipAuthRefresh: true }),
 
   resendInvestorVerification: (email: string) =>
-    api.post<{ message: string }>("auth/investor/resend-verification", { email }),
+    api.post<{ message: string }>("auth/investor/resend-verification", { email }, { skipAuthRefresh: true }),
 
   investorProfile: () =>
     api.get<InvestorProfileResponse>("auth/investor/me"),
+
+  updateInvestorProfile: (data: { fullName: string; phone: string; countryCode: string }) =>
+    api.put<InvestorProfileResponse>("auth/investor/me", data),
 };
 
 export interface InvestorAuthContext {
@@ -369,6 +369,8 @@ export interface InvestorProfileResponse {
   email: string;
   name: string;
   phone?: string | null;
+  countryCode?: string | null;
+  createdAt: string;
   investor: InvestorAuthContext;
 }
 

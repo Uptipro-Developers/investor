@@ -4,6 +4,7 @@ export interface User {
   fullName: string;
   phone: string;
   country: string;
+  countryCode?: string;
   investmentExperience: "beginner" | "intermediate" | "advanced";
   riskAppetite: "low" | "medium" | "high";
   kycStatus: "pending" | "under_review" | "verified" | "failed" | "remediation_required";
