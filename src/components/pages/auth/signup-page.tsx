@@ -22,7 +22,6 @@ type SignupFormState = {
   confirmPassword: string;
   country: string;
   dateOfBirth: string;
-  nationality: string;
   idType: string;
   sourceOfFunds: string;
   employmentStatus: string;
@@ -84,6 +83,21 @@ const INSTITUTION_TYPES = [
 ];
 
 const STRUCTURES = ["Equity", "Debt / note", "Revenue share", "Joint venture"];
+
+const PERSON_NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} .'-]*$/u;
+const RESEND_COOLDOWN_MS = 60_000;
+
+const resendCooldownKey = (email: string) =>
+  `urbco_verification_resend_available_at:${email.trim().toLowerCase()}`;
+
+const sanitizePhoneInput = (value: string) => {
+  const allowedCharacters = value.replace(/[^\d+()\s-]/g, "");
+  const firstPlus = allowedCharacters.indexOf("+");
+
+  if (firstPlus === -1) return allowedCharacters;
+
+  return `${firstPlus === 0 ? "+" : ""}${allowedCharacters.replace(/\+/g, "")}`;
+};
 
 const TICKET_RANGES: Record<string, { minimum: number; maximum?: number }> = {
   "₦200M – ₦500M": { minimum: 200_000_000, maximum: 500_000_000 },
@@ -197,7 +211,7 @@ function SignupContent() {
     // shared account
     fullName: "", email: "", phone: "", password: "", confirmPassword: "", country: "NG",
     // individual
-    dateOfBirth: "", nationality: "Nigerian", idType: "Passport",
+    dateOfBirth: "", idType: "Passport",
     sourceOfFunds: "Employment income", employmentStatus: "Employed",
     // family office
     entityName: "", aumRange: "$10M – $50M", registrationNumber: "", officeCountry: "NG",
@@ -224,6 +238,11 @@ function SignupContent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!agreed || !passwordsMatch) return;
+    const fullName = form.fullName.trim();
+    if (!PERSON_NAME_PATTERN.test(fullName)) {
+      toast.error("Enter a valid full name", "Full name can contain letters, spaces, apostrophes, hyphens, and periods only.");
+      return;
+    }
     if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(form.password)) {
       toast.error("Choose a stronger password", "Use at least 8 characters with uppercase, lowercase, a number, and a special character.");
       return;
@@ -234,6 +253,10 @@ function SignupContent() {
     const phone = countryCode === "NG" && compactPhone.startsWith("0")
       ? `+234${compactPhone.slice(1)}`
       : compactPhone;
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+      toast.error("Enter a valid phone number", "Use an international phone number such as +2348012345678.");
+      return;
+    }
     const ticket = TICKET_RANGES[form.ticketSize];
     const horizon = HORIZON_RANGES[form.horizon];
     const aum = AUM_RANGES[form.aumRange];
@@ -244,7 +267,7 @@ function SignupContent() {
       track: track.toUpperCase() as InvestorRegistrationRequest["track"],
       entityType,
       account: {
-        fullName: form.fullName.trim(),
+        fullName,
         email: form.email.trim().toLowerCase(),
         phone,
         password: form.password,
@@ -252,7 +275,6 @@ function SignupContent() {
       },
       individual: entity === "individual" ? {
         dateOfBirth: form.dateOfBirth,
-        nationality: form.nationality,
         primaryIdType: form.idType,
         sourceOfFunds: form.sourceOfFunds,
         employmentStatus: form.employmentStatus,
@@ -293,6 +315,7 @@ function SignupContent() {
     }
 
     sessionStorage.setItem("urbco_pending_email", payload.account.email);
+    sessionStorage.setItem(resendCooldownKey(payload.account.email), String(Date.now() + RESEND_COOLDOWN_MS));
     toast.success("Account created", "Enter the verification code sent to your email.");
     router.push(`/auth/otp-verify?email=${encodeURIComponent(payload.account.email)}`);
   };
@@ -389,8 +412,14 @@ function SignupContent() {
                       </Label>
                       <div className="relative">
                         <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <Input id="fullName" value={form.fullName} onChange={(e) => set({ fullName: e.target.value })}
-                          className="pl-9" required autoComplete="name" placeholder="e.g. Ada Okonkwo" />
+                        <Input id="fullName" value={form.fullName}
+                          onChange={(e) => {
+                            if (e.target.value === "" || PERSON_NAME_PATTERN.test(e.target.value)) {
+                              set({ fullName: e.target.value });
+                            }
+                          }}
+                          className="pl-9" required minLength={2} maxLength={100} autoComplete="name"
+                          placeholder="e.g. Ada Okonkwo" title="Use letters, spaces, apostrophes, hyphens, and periods only" />
                       </div>
                     </div>
                     <div className="space-y-1.5">
@@ -410,8 +439,10 @@ function SignupContent() {
                       <Label htmlFor="phone" className="text-slate-700">Phone number</Label>
                       <div className="relative">
                         <Phone className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                        <Input id="phone" type="tel" value={form.phone} onChange={(e) => set({ phone: e.target.value })}
-                          className="pl-9" required autoComplete="tel" placeholder="+234 801 234 5678" />
+                        <Input id="phone" type="tel" inputMode="tel" value={form.phone}
+                          onChange={(e) => set({ phone: sanitizePhoneInput(e.target.value) })}
+                          className="pl-9" required autoComplete="tel" placeholder="+234 801 234 5678"
+                          title="Use digits and an international country code, for example +2348012345678" />
                       </div>
                     </div>
                     <div className="space-y-1.5">
@@ -464,7 +495,7 @@ function SignupContent() {
                 <>
                   <Section step={4} title="About you">
                   <div className="space-y-4">
-                    <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-1.5">
                         <Label htmlFor="dob" className="text-slate-700">Date of birth</Label>
                         <Input id="dob" type="date" value={form.dateOfBirth} onChange={(e) => set({ dateOfBirth: e.target.value })} required />
@@ -479,10 +510,6 @@ function SignupContent() {
                             <SelectItem value="Driver's licence">Driver&apos;s licence</SelectItem>
                           </SelectContent>
                         </Select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="nationality" className="text-slate-700">Nationality</Label>
-                        <Input id="nationality" value={form.nationality} onChange={(e) => set({ nationality: e.target.value })} required />
                       </div>
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">

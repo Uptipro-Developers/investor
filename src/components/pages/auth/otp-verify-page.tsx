@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Mail, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, authAPI, authStorage } from "@/lib/api";
 import { useAppStore } from "@/stores/appStore";
 import { useToast } from "@/hooks/use-toast";
+
+const RESEND_COOLDOWN_SECONDS = 60;
+const resendCooldownKey = (email: string) =>
+  `urbco_verification_resend_available_at:${email.trim().toLowerCase()}`;
+const formatCooldown = (seconds: number) =>
+  `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 
 export default function OTPVerifyPage() {
   return (
@@ -29,6 +35,34 @@ function OTPVerifyContent() {
   const [email] = useState(searchParams.get("email") || "");
   const [isLoading, setIsLoading] = useState(false);
   const [isResending, setIsResending] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [isCooldownReady, setIsCooldownReady] = useState(false);
+
+  useEffect(() => {
+    if (!email) return;
+
+    const storageKey = resendCooldownKey(email);
+    const updateCooldown = () => {
+      const availableAt = Number(sessionStorage.getItem(storageKey) || 0);
+      const secondsRemaining = Math.max(0, Math.ceil((availableAt - Date.now()) / 1000));
+      setResendCooldown(secondsRemaining);
+      setIsCooldownReady(true);
+      if (secondsRemaining === 0) sessionStorage.removeItem(storageKey);
+    };
+
+    updateCooldown();
+    const timer = window.setInterval(updateCooldown, 1_000);
+    return () => window.clearInterval(timer);
+  }, [email]);
+
+  const startResendCooldown = () => {
+    if (!email) return;
+    sessionStorage.setItem(
+      resendCooldownKey(email),
+      String(Date.now() + RESEND_COOLDOWN_SECONDS * 1_000),
+    );
+    setResendCooldown(RESEND_COOLDOWN_SECONDS);
+  };
 
   const handleChange = (element: HTMLInputElement, index: number) => {
     if (isNaN(Number(element.value))) return;
@@ -97,13 +131,18 @@ function OTPVerifyContent() {
       toast.error("Email unavailable", "Return to signup and submit your account details again.");
       return;
     }
+    if (resendCooldown > 0 || isResending) return;
     setIsResending(true);
     const response = await authAPI.resendInvestorVerification(email);
     setIsResending(false);
     if (!response.success) {
+      if (response.error?.toLowerCase().includes("wait one minute")) {
+        startResendCooldown();
+      }
       toast.error("Could not resend code", response.error || "Please try again shortly.");
       return;
     }
+    startResendCooldown();
     toast.success("New code sent", "Check your email for the latest verification code.");
   };
 
@@ -159,10 +198,15 @@ function OTPVerifyContent() {
                   <button
                     type="button"
                     onClick={handleResend}
-                    disabled={isResending}
+                    disabled={!isCooldownReady || isResending || resendCooldown > 0}
+                    aria-live="polite"
                     className="text-emerald-600 font-medium hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {isResending ? "Sending..." : "Resend"}
+                    {isResending
+                      ? "Sending..."
+                      : resendCooldown > 0
+                        ? `Resend in ${formatCooldown(resendCooldown)}`
+                        : "Resend"}
                   </button>
                 </p>
               </div>
